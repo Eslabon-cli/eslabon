@@ -74,6 +74,7 @@ impl ReqwestTransport {
     }
 
     async fn send(&self, req: Request) -> Result<HttpResponse, TransportError> {
+        crate::eslabon_policy::check(&req.url)?;
         let prepared = req.prepare_body_for_send().map_err(TransportError::Build)?;
 
         let Request {

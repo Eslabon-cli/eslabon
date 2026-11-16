@@ -1,5 +1,6 @@
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelMessages;
@@ -11,10 +12,36 @@ use codex_protocol::openai_models::default_input_modalities;
 
 use crate::config::ModelsManagerConfig;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tracing::warn;
 
 pub const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 const PERSONALITY_SECTION_HEADER: &str = "# Personality";
+
+// eslabon: conservative metadata for a model no catalog knows, so a session on an
+// OpenAI-compatible `wire_api = "chat"` server is usable instead of trusting the
+// upstream 272k fallback. Context 32k keeps the auto-compact window under the
+// context of a typical local server, the shell tool travels as a chat function
+// call, and no OpenAI-only reasoning parameters are requested.
+pub(crate) const CONTEXTO_POR_DEFECTO: i64 = 32_768;
+
+/// eslabon: whether the Eslabon profile applies. Set once by the config load
+/// (`codex-core`'s `eslabon::apply_data_policy`); `false` keeps upstream intact.
+static PERFIL_POR_DEFECTO_ESLABON: AtomicBool = AtomicBool::new(false);
+
+/// eslabon: turns the default profile on for this process when in Eslabon mode.
+///
+/// Process-wide, like the egress policy: the TUI and a separate app-server daemon
+/// resolve model metadata in different tasks, so a per-config flag would miss one.
+pub fn activar_perfil_por_defecto_eslabon(activo: bool) {
+    PERFIL_POR_DEFECTO_ESLABON.store(activo, Ordering::Relaxed);
+}
+
+/// Whether an unknown model gets the conservative chat profile right now.
+pub fn perfil_por_defecto_eslabon_activo() -> bool {
+    PERFIL_POR_DEFECTO_ESLABON.load(Ordering::Relaxed)
+}
 
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
     if let Some(context_window) = config.model_context_window {
@@ -97,6 +124,38 @@ fn is_h1_heading(line: &str) -> bool {
 /// Build a minimal fallback model descriptor for missing/unknown slugs.
 pub fn model_info_from_slug(slug: &str) -> ModelInfo {
     warn!("Unknown model {slug} is used. This will use fallback model metadata.");
+    metadata_generica(slug)
+}
+
+/// eslabon: the conservative profile for an unknown model in Eslabon mode, a
+/// functional base for a server that only speaks Chat Completions.
+pub fn model_info_desconocido_eslabon(slug: &str) -> ModelInfo {
+    let mut info = metadata_generica(slug);
+    // eslabon: 32k; the context of a local server is usually the window it was
+    // loaded with, not a hosted 272k.
+    info.context_window = Some(CONTEXTO_POR_DEFECTO);
+    // eslabon: no cap, so an explicit `model_context_window` above the default
+    // wins in `with_config_overrides` instead of being clamped.
+    info.max_context_window = None;
+    // eslabon: `None` derives the auto-compact threshold from the effective
+    // context (90%), so a user-raised window keeps its headroom.
+    info.auto_compact_token_limit = None;
+    // eslabon: the shell runs through the chat adapter's function calling.
+    info.shell_type = ConfigShellToolType::UnifiedExec;
+    // eslabon: Chat Completions has no reasoning-summary parameter nor levels.
+    info.supports_reasoning_summary_parameter = false;
+    info.default_reasoning_summary = ReasoningSummary::None;
+    info.supported_reasoning_levels = Vec::new();
+    info.default_reasoning_level = None;
+    // eslabon: freeform apply_patch travels as a function with an `input` string.
+    info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+    // eslabon: MCP tools load on demand through the client-executed `tool_search`
+    // function, keeping the first request small.
+    info.supports_search_tool = true;
+    info
+}
+
+fn metadata_generica(slug: &str) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
         display_name: slug.to_string(),

@@ -107,6 +107,10 @@ mod activation_key_guard;
 mod additional_dirs;
 mod analytics;
 mod app;
+mod eslabon_sidebar;
+mod eslabon_speed;
+mod eslabon_stream;
+pub use eslabon_stream::enable_eslabon_defaults;
 mod app_backtrack;
 mod app_command;
 mod app_event;
@@ -1239,7 +1243,10 @@ async fn run_ratatui_app(
     let workload_identity_selected = is_workload_identity_selected();
     color_eyre::install()?;
 
-    tooltips::announcement::prewarm(initial_config.http_client_factory());
+    // eslabon: no announcement-tip request to raw.githubusercontent.com unless enabled.
+    if initial_config.eslabon_anuncios {
+        tooltips::announcement::prewarm(initial_config.http_client_factory());
+    }
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
@@ -1406,6 +1413,28 @@ async fn run_ratatui_app(
             &app_server_target,
             Feature::GcpSetupWizard,
         );
+        // eslabon: probe the usual local ports for the first-run wizard. The
+        // draft stays visible while loopback answers with the short timeout.
+        let eslabon_local = if should_show_local_setup(
+            login_status,
+            requires_openai_auth,
+            &initial_config,
+            &app_server_target,
+        ) {
+            let servidores = startup_draft
+                .run_until(&mut tui, tokio::task::spawn_blocking(|| {
+                    eslabon_config::detector::detectar(
+                        &eslabon_config::sondeo::SondeoHttp,
+                    )
+                }))
+                .await
+                .ok()
+                .and_then(|resultado| resultado.ok())
+                .unwrap_or_default();
+            Some(servidores)
+        } else {
+            None
+        };
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
                 show_login_screen,
@@ -1419,6 +1448,7 @@ async fn run_ratatui_app(
                     .as_ref()
                     .map(AppServerSession::request_handle),
                 config: initial_config.clone(),
+                eslabon_local,
             },
             if show_login_screen {
                 app_server.as_mut()
@@ -1438,6 +1468,9 @@ async fn run_ratatui_app(
         if onboarding_result.should_exit {
             shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
             let _ = tui.terminal.clear();
+            if let Some(message) = &onboarding_result.exit_message {
+                eprintln!("{message}");
+            }
             return Ok(AppExitInfo {
                 token_usage: crate::token_usage::TokenUsage::default(),
                 thread_id: None,
@@ -2498,6 +2531,21 @@ fn should_show_provider_setup_wizard(
         && config
             .auth_config()
             .is_login_method_allowed(ForcedLoginMethod::Api)
+}
+
+/// eslabon: whether the first run offers the local-server wizard instead of a
+/// mandatory OpenAI login. Outside Eslabon mode this is always false so
+/// upstream's onboarding and its snapshots stay unchanged.
+fn should_show_local_setup(
+    login_status: LoginStatus,
+    requires_openai_auth: bool,
+    config: &Config,
+    app_server_target: &AppServerTarget,
+) -> bool {
+    crate::eslabon_stream::branded()
+        && matches!(app_server_target, AppServerTarget::Embedded)
+        && should_show_login_screen(login_status, requires_openai_auth)
+        && config.model_provider_id == "openai"
 }
 
 mod daemon_recovery;

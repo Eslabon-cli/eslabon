@@ -1423,6 +1423,9 @@ impl App {
             AppEvent::OpenUrlInBrowser { url } => {
                 self.open_url_in_browser(url);
             }
+            AppEvent::Eslabon(event) => {
+                self.handle_eslabon_sidebar_event(tui, app_server, event);
+            }
             AppEvent::OpenDesktopThread { thread_id } => {
                 self.open_desktop_thread(thread_id);
             }
@@ -2194,6 +2197,16 @@ impl App {
                     .await;
             }
             AppEvent::UpdateModel(model) => {
+                // eslabon: a model from another provider forks the conversation onto it.
+                if let Some(provider) = crate::eslabon_stream::provider_for_model(
+                    self.config.codex_home.as_path(),
+                    &model,
+                ) && provider != self.chat_widget.config_ref().model_provider_id
+                {
+                    self.eslabon_switch_provider(tui, app_server, provider, model)
+                        .await?;
+                    return Ok(AppRunControl::Continue);
+                }
                 if self
                     .active_thread_model_setting_update_params(model.clone())
                     .is_some_and(|params| params.permissions.is_some())
@@ -2212,6 +2225,26 @@ impl App {
                 }
             }
             AppEvent::ApplyModelSelection { model, effort } => {
+                // eslabon: same as UpdateModel — a model from another provider forks the
+                // conversation onto it. Without this the picker kept the old provider and
+                // saved the new model next to it (2026-11-12: DeepSeek sent to Qwen's port).
+                if let Some(provider) = crate::eslabon_stream::provider_for_model(
+                    self.config.codex_home.as_path(),
+                    &model,
+                ) && provider != self.chat_widget.config_ref().model_provider_id
+                {
+                    self.eslabon_switch_provider(tui, app_server, provider.clone(), model.clone())
+                        .await?;
+                    if self.chat_widget.config_ref().model_provider_id == provider {
+                        self.persist_default_model_selection(
+                            app_server.request_handle(),
+                            model,
+                            effort,
+                        )
+                        .await;
+                    }
+                    return Ok(AppRunControl::Continue);
+                }
                 if app_server.thread_params_mode().settings_owner()
                     == ThreadSettingsOwner::Server
                 {
@@ -2670,8 +2703,75 @@ impl App {
                 }
             }
             AppEvent::PersistModelSelection { model, effort } => {
-                self.persist_default_model_selection(app_server.request_handle(), model, effort)
-                    .await;
+                self.app_event_tx.send(AppEvent::FollowTranscript);
+                // eslabon: save the provider with the model, but only once the session
+                // actually switched to it (a refused switch, e.g. by PHI, saves nothing).
+                let eslabon_provider = crate::eslabon_stream::provider_for_model(
+                    self.config.codex_home.as_path(),
+                    &model,
+                );
+                if eslabon_provider
+                    .as_ref()
+                    .is_some_and(|provider| *provider != self.chat_widget.config_ref().model_provider_id)
+                {
+                    return Ok(AppRunControl::Continue);
+                }
+                // eslabon: with a profile open (`-p <profile>`) the choice is for this
+                // session only; the profile keeps its own default.
+                if let Some(profile_file) = self
+                    .config
+                    .config_layer_stack
+                    .get_user_config_file()
+                    .and_then(|file| file.as_path().file_name().map(|name| name.to_string_lossy().into_owned()))
+                    .filter(|name| name != "config.toml" && name.ends_with(".config.toml"))
+                {
+                    let profile = profile_file.trim_end_matches(".config.toml").to_string();
+                    self.chat_widget.add_info_message(
+                        format!("Using {model} for this session; profile `{profile}` keeps its default."),
+                        /*hint*/ None,
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
+                let mut model_edits = crate::config_update::build_model_selection_edits(
+                    model.as_str(),
+                    effort.as_ref(),
+                );
+                if let Some(provider) = eslabon_provider {
+                    model_edits.push(crate::config_update::replace_config_value(
+                        "model_provider",
+                        serde_json::json!(provider),
+                    ));
+                }
+                match self.persist_model_defaults(
+                    app_server.request_handle(),
+                    model_edits,
+                    "default model and reasoning effort",
+                )
+                .await
+                {
+                    Ok(()) => {
+                        let effort_label = effort
+                            .as_ref()
+                            .map(std::string::ToString::to_string)
+                            .unwrap_or_else(|| "default".to_string());
+                        tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
+                        let mut message = format!("Model changed to {model}");
+                        if let Some(label) = Self::reasoning_label_for(&model, effort.as_ref()) {
+                            message.push(' ');
+                            message.push_str(&label);
+                        }
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
+                    }
+                    Err(err) => {
+                        let error = format_config_error(&err);
+                        tracing::error!(
+                            error = %error,
+                            "failed to persist model selection"
+                        );
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save default model: {error}"));
+                    }
+                }
             }
             AppEvent::PersistDaybreakSelection { thread_id, enabled } => {
                 self.persist_daybreak_selection(app_server, thread_id, enabled).await;

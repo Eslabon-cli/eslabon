@@ -10,6 +10,16 @@ default-run = "codex"
 name = "codex"
 path = "src/main.rs"
 
+# eslabon: second binary over the same source. Only argv[0] changes, and
+# `modo_eslabon` reads it to turn on Eslabon mode (P4.2).
+# Its tests are the same suite as `codex`; running them again would ask for
+# `eslabon__*` insta snapshots (the module path is the bin name), duplicating
+# every cli snapshot. `cargo test` covers the code through the codex target.
+[[bin]]
+name = "eslabon"
+path = "src/main.rs"
+test = false
+
 [[bin]]
 name = "logs_client"
 path = "src/bin/logs_client.rs"
@@ -27,6 +37,8 @@ doctest = false
 workspace = true
 
 [dependencies]
+eslabon-catalog = { workspace = true }
+eslabon-config = { workspace = true }
 codex-utils-process = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
@@ -90,6 +102,8 @@ libc = { workspace = true }
 os_info = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
+semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
@@ -106,6 +120,7 @@ tokio = { workspace = true, features = [
     "time",
 ] }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }

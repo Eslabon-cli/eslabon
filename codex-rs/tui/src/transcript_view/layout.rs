@@ -35,6 +35,11 @@ pub(super) fn activity_layout(
     if !has_details {
         return layout;
     }
+    // eslabon: collapsed rows are clickable themselves; their header already says
+    // how much output is hidden.
+    if crate::eslabon_stream::enabled() && !expanded {
+        return layout.with_inline_disclosure_control();
+    }
     let label = match (expanded, lines.disclosure) {
         (true, Some(ActivityDisclosure::OutputLines(_))) => "− Show less".to_owned(),
         (true, Some(ActivityDisclosure::Generic) | None) => "− Hide details".to_owned(),
@@ -404,3 +409,76 @@ impl LayoutCache {
 #[cfg(test)]
 #[path = "layout_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod eslabon_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn lines(rows: &[&str]) -> ActivityTranscriptLines {
+        ActivityTranscriptLines {
+            activity: rows
+                .iter()
+                .map(|row| HyperlinkLine::from(Line::from((*row).to_owned())))
+                .collect(),
+            auxiliary: Vec::new(),
+            disclosure: Some(ActivityDisclosure::OutputLines(2)),
+        }
+    }
+
+    #[test]
+    fn collapsed_rows_are_their_own_control() {
+        let _eslabon = crate::eslabon_stream::force_for_test();
+        let layout = activity_layout(lines(&["✓ $ python3 main.py · 2 lines"]), 60, false, None);
+        assert_eq!(layout.row_count(), 1, "no '+ Show details' row is added");
+        assert_eq!(layout.disclosure_row(), Some(0));
+        assert!(!layout.disclosure_columns().is_empty());
+        // Re-wrapping keeps the inline control instead of inserting a row.
+        let rewrapped = layout.rewrap(30);
+        assert_eq!(rewrapped.disclosure_row(), Some(0));
+        assert_eq!(rewrapped.row_count(), layout.rewrap(30).row_count());
+    }
+
+    #[test]
+    fn expanded_rows_keep_show_less() {
+        let _eslabon = crate::eslabon_stream::force_for_test();
+        let layout = activity_layout(lines(&["$ python3 main.py", "5", "6"]), 60, true, None);
+        assert_eq!(layout.row_count(), 4);
+        assert_eq!(layout.disclosure_row(), Some(3));
+    }
+
+    #[test]
+    fn upstream_appends_a_control_row() {
+        let layout = activity_layout(lines(&["• Ran python3 main.py"]), 60, false, None);
+        assert_eq!(layout.row_count(), 2);
+        assert_eq!(layout.disclosure_row(), Some(1));
+    }
+}
+
+#[cfg(test)]
+mod eslabon_separator_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn inline_control_follows_the_leading_separator_through_rewrap() {
+        let _eslabon = crate::eslabon_stream::force_for_test();
+        let lines = ActivityTranscriptLines {
+            activity: vec![HyperlinkLine::from(Line::from(
+                "✓ $ cargo test · 120 lines",
+            ))],
+            auxiliary: Vec::new(),
+            disclosure: Some(ActivityDisclosure::OutputLines(120)),
+        };
+        let layout = activity_layout(lines, 60, false, None).with_leading_separator();
+        assert_eq!(layout.row_count(), 2);
+        assert_eq!(
+            layout.disclosure_row(),
+            Some(1),
+            "control moves below the separator"
+        );
+        let rewrapped = layout.rewrap(20);
+        assert_eq!(rewrapped.disclosure_row(), Some(1));
+        assert!(rewrapped.row_count() >= 2);
+    }
+}

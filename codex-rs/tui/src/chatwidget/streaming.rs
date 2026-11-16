@@ -422,6 +422,18 @@ impl ChatWidget {
     }
 
     pub(super) fn on_stream_error(&mut self, message: String, additional_details: Option<String>) {
+        // eslabon: the status row clips details and cannot be selected. Put each distinct
+        // retry reason, in full, into the transcript so it can be read and copied.
+        if crate::eslabon_stream::enabled()
+            && let Some(details) = additional_details
+            .as_ref()
+            .map(|details| details.trim())
+            .filter(|details| !details.is_empty())
+            && self.eslabon_last_stream_error.as_deref() != Some(details)
+        {
+            self.eslabon_last_stream_error = Some(details.to_string());
+            self.add_error_message(format!("Retrying: {details}"));
+        }
         self.status_state.remember_retry_status_header();
         self.bottom_pane.ensure_status_indicator();
         self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;

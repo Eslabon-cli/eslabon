@@ -44,6 +44,8 @@ pub(super) struct PreparedConversation {
     motion: MotionMode,
     now: Instant,
     turn_tip: Option<(TipSurface, TurnTip)>,
+    /// eslabon: right-hand sidebar column and what to draw in it.
+    sidebar: Option<(Rect, crate::eslabon_sidebar::SidebarSnapshot)>,
 }
 
 /// The composer bounds and follow-up work from a successful draw.
@@ -205,6 +207,7 @@ impl App {
                 .unwrap_or_else(|| tui.terminal.previous_buffer().clone())
         });
         let mut painted = PaintedConversation::default();
+        let mut sidebar_hits = Vec::new();
         tui.draw(screen_size.height, |frame| {
             if let Some(backdrop) = backdrop {
                 let viewport = frame.area();
@@ -223,8 +226,22 @@ impl App {
                 }
             }
             painted = self.paint_conversation(frame, &prepared);
+            // eslabon: the sidebar, before a centered dialog so the dialog covers it.
+            if let Some((rect, snapshot)) = prepared.sidebar.as_ref() {
+                sidebar_hits = crate::eslabon_sidebar::render(snapshot, *rect, frame.buffer);
+            }
             self.paint_centered_dialog(frame);
         })?;
+        self.chat_widget.set_eslabon_sidebar_hits(sidebar_hits);
+        if prepared
+            .sidebar
+            .as_ref()
+            .is_some_and(|(_, snapshot)| snapshot.working)
+        {
+            // Keep the activity bar and live speeds moving while the model works.
+            tui.frame_requester()
+                .schedule_frame_in(Duration::from_millis(/*millis*/ 70));
+        }
         self.finish_conversation(tui, painted)
     }
 
@@ -235,6 +252,12 @@ impl App {
         frames: &tui::FrameRequester,
     ) -> PreparedConversation {
         self.conversation_frame.inset = conversation_inset;
+        let full_area = self
+            .conversation_frame
+            .inset
+            .map_or(viewport, |area| area.intersection(viewport));
+        let sidebar = Self::eslabon_sidebar_rect(full_area, conversation_inset)
+            .map(|rect| (rect, self.chat_widget.eslabon_sidebar_snapshot()));
         let area = self.conversation_area(viewport);
         self.chat_widget.sync_warnings(&self.transcript_cells);
         let motion = MotionMode::from_animations_enabled(
@@ -283,6 +306,7 @@ impl App {
             motion,
             now,
             turn_tip,
+            sidebar,
         }
     }
 
@@ -529,9 +553,28 @@ impl App {
     }
 
     pub(super) fn conversation_area(&self, viewport: Rect) -> Rect {
-        self.conversation_frame
+        let area = self
+            .conversation_frame
             .inset
-            .map_or(viewport, |area| area.intersection(viewport))
+            .map_or(viewport, |area| area.intersection(viewport));
+        // eslabon: the conversation lays out in the columns left of the sidebar.
+        match Self::eslabon_sidebar_rect(area, self.conversation_frame.inset) {
+            Some(sidebar) => Rect {
+                width: sidebar.x - area.x,
+                ..area
+            },
+            None => area,
+        }
+    }
+
+    /// eslabon: where the sidebar goes; only on the full owned screen, never inside an
+    /// outer owner's inset.
+    fn eslabon_sidebar_rect(area: Rect, inset: Option<Rect>) -> Option<Rect> {
+        if inset.is_some() {
+            return None;
+        }
+        crate::eslabon_sidebar::split_width(area.width)
+            .map(|(main, sidebar)| Rect::new(area.x + main, area.y, sidebar, area.height))
     }
 
     pub(super) fn refresh_owned_transcript(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -601,6 +644,27 @@ impl App {
             return Ok(false);
         }
         if let TuiEvent::Mouse(mouse) = event {
+            // eslabon: a press on the sidebar must not start a transcript or composer
+            // selection. Drags, releases and moves still pass through so a selection
+            // that started in the transcript ends cleanly and hover state clears.
+            if self.conversation_frame.inset.is_none()
+                && let Some((main_width, _)) =
+                    crate::eslabon_sidebar::split_width(tui.terminal.last_known_screen_size.width)
+                && mouse.column >= main_width
+                && matches!(mouse.kind, crossterm::event::MouseEventKind::Down(_))
+            {
+                if matches!(
+                    mouse.kind,
+                    crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                ) && self.chat_widget.no_modal_or_popup_active()
+                    && self
+                        .chat_widget
+                        .eslabon_sidebar_click(mouse.column, mouse.row)
+                {
+                    tui.frame_requester().schedule_frame();
+                }
+                return Ok(true);
+            }
             let composer_ready = self.chat_widget.prepare_composer_mouse(*mouse);
             if mouse.kind != crossterm::event::MouseEventKind::Moved {
                 self.refresh_owned_transcript(tui)?;

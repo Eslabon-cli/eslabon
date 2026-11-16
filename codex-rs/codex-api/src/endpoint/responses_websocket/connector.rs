@@ -34,6 +34,7 @@ impl ResponsesWebsocketClient {
             .provider
             .websocket_url_for_path(RESPONSES_PATH)
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
+        crate::eslabon_policy::check_egress(ws_url.as_str())?;
         let headers = merge_request_headers(&self.provider.headers, extra_headers, default_headers);
         let headers = self.auth.apply_auth_headers(headers).await?;
         let (stream, _response, server_reasoning_included, server_model) =

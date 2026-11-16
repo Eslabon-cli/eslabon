@@ -165,6 +165,7 @@ use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
+mod eslabon;
 mod auth_keyring;
 pub mod edit;
 mod managed_features;
@@ -1202,6 +1203,20 @@ pub struct Config {
     /// Defaults to `true`.
     pub feedback_enabled: bool,
 
+    /// eslabon: base URLs of `[eslabon] phi_providers`, used to turn the PHI block on.
+    pub eslabon_phi_allowed_base_urls: Vec<String>,
+
+    /// eslabon: whether the origin rule (OpenAI-family hosts denied) was decided on
+    /// for this config load. `login`/`logout` force it off.
+    pub eslabon_origen_activo: bool,
+
+    /// eslabon: `[eslabon] notify_aprobacion`, run when a session waits for an approval.
+    pub eslabon_notify_aprobacion: Option<Vec<String>>,
+
+    /// eslabon: `[eslabon] anuncios` effective value. `false` skips the upstream
+    /// announcement-tip prewarm (a request to `raw.githubusercontent.com`).
+    pub eslabon_anuncios: bool,
+
     /// Configured discoverable tools for tool suggestions.
     pub tool_suggest: ToolSuggestConfig,
 
@@ -2083,6 +2098,21 @@ impl Config {
             .await
     }
 
+    /// eslabon: config load for `login`/`logout`, an explicit request by the user to
+    /// use OpenAI. The origin rule must not block `auth.openai.com`, so this entry
+    /// point turns it off right after the load; the override travels with the call,
+    /// never as argv or a global read inside `core`.
+    pub async fn load_with_cli_overrides_permitiendo_openai(
+        cli_overrides: Vec<(String, TomlValue)>,
+    ) -> std::io::Result<Self> {
+        let mut config = ConfigBuilder::default()
+            .cli_overrides(cli_overrides)
+            .build()
+            .await?;
+        permitir_openai_explicito(&mut config);
+        Ok(config)
+    }
+
     /// Load a default configuration when user config files are invalid.
     pub async fn load_default_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
@@ -2137,6 +2167,13 @@ impl Config {
             .build()
             .await
     }
+}
+
+/// eslabon: turns the origin rule off for an explicit request to use OpenAI
+/// (`eslabon login` / `logout`); the rest of the process keeps its config load rule.
+pub(crate) fn permitir_openai_explicito(config: &mut Config) {
+    codex_api::eslabon_policy::set_origin_policy(false);
+    config.eslabon_origen_activo = false;
 }
 
 pub fn resolve_profile_v2_config_path(
@@ -3552,12 +3589,15 @@ impl Config {
             web_search_request: override_tools_web_search_request,
         };
 
+        // eslabon: plugins default off in Eslabon mode; an explicit user value wins.
+        let eslabon_features = eslabon::features_eslabon(cfg.features.as_ref());
         let configured_features = Features::from_sources(
             FeatureConfigSource {
                 features: cfg.features.as_ref(),
                 experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             },
             FeatureConfigSource {
+                features: eslabon_features.as_ref(),
                 ..Default::default()
             },
             feature_overrides,
@@ -4062,6 +4102,24 @@ impl Config {
                 std::io::Error::new(std::io::ErrorKind::NotFound, message)
             })?
             .clone();
+        // eslabon: validate and activate the PHI egress policy before anything is sent.
+        let cli_auth_credentials_store_mode = cli_auth_credentials_store
+            .as_ref()
+            .map(|required| required.value)
+            .unwrap_or_else(|| {
+                resolve_cli_auth_credentials_store_mode(
+                    cfg.cli_auth_credentials_store.unwrap_or_default(),
+                    env!("CARGO_PKG_VERSION"),
+                )
+            });
+        let eslabon_policy = eslabon::apply_data_policy(
+            cfg.eslabon.as_ref(),
+            &model_providers,
+            &model_provider_id,
+            codex_home.as_path(),
+            cli_auth_credentials_store_mode,
+        )?;
+        let eslabon_phi = eslabon_policy.phi_active;
 
         let shell_environment_policy = ShellEnvironmentPolicy::from(cfg.shell_environment_policy);
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
@@ -4313,7 +4371,9 @@ impl Config {
         let compact_prompt = compact_prompt.or(file_compact_prompt);
         let review_model = override_review_model.or(cfg.review_model);
 
-        let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
+        // eslabon: startup update check is off in Eslabon mode unless the user says otherwise.
+        let check_for_update_on_startup =
+            eslabon::check_for_update_on_startup(cfg.check_for_update_on_startup);
         let model_catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
 
         let log_dir = cfg
@@ -4581,13 +4641,7 @@ impl Config {
             include_environment_context_time,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: match cli_auth_credentials_store {
-                Some(required) => required.value,
-                None => resolve_cli_auth_credentials_store_mode(
-                    cfg.cli_auth_credentials_store.unwrap_or_default(),
-                    env!("CARGO_PKG_VERSION"),
-                ),
-            },
+            cli_auth_credentials_store_mode,
             mcp_servers,
             non_prefixed_mcp_tool_servers,
             mcp_enterprise_managed_auth,
@@ -4749,12 +4803,26 @@ impl Config {
                 .and_then(|tui| tui.disable_paste_burst)
                 .or(cfg.disable_paste_burst)
                 .unwrap_or(false),
-            analytics_enabled: cfg.analytics.as_ref().and_then(|a| a.enabled),
-            feedback_enabled: cfg
-                .feedback
+            // eslabon: PHI sessions send no analytics; Eslabon mode defaults it off.
+            analytics_enabled: eslabon::analytics_enabled(
+                cfg.analytics.as_ref().and_then(|analytics| analytics.enabled),
+                eslabon_phi,
+            ),
+            // eslabon: Eslabon mode defaults feedback (Sentry uploads) off; an
+            // explicit `feedback.enabled = true` still wins.
+            feedback_enabled: !eslabon_phi
+                && eslabon::feedback_enabled(
+                    cfg.feedback.as_ref().and_then(|feedback| feedback.enabled),
+                ),
+            eslabon_phi_allowed_base_urls: eslabon_policy.allowed_base_urls.clone(),
+            eslabon_origen_activo: eslabon_policy.origen_activo,
+            eslabon_notify_aprobacion: cfg
+                .eslabon
                 .as_ref()
-                .and_then(|feedback| feedback.enabled)
-                .unwrap_or(true),
+                .and_then(|eslabon| eslabon.notify_aprobacion.clone()),
+            eslabon_anuncios: eslabon::anuncios(
+                cfg.eslabon.as_ref().and_then(|eslabon| eslabon.anuncios),
+            ),
             tool_suggest,
             tui_notifications: cfg
                 .tui

@@ -13,6 +13,17 @@ pub(crate) enum ToolSearchSourceListing {
     Omit,
 }
 
+/// Longest source summary listed in the `tool_search` description.
+const MAX_SOURCE_SUMMARY_BYTES: usize = 160;
+
+/// The first sentence of a source description, at most [`MAX_SOURCE_SUMMARY_BYTES`].
+fn source_summary(description: &str) -> &str {
+    let first_sentence = description
+        .find(". ")
+        .map_or(description, |end| &description[..=end]);
+    take_bytes_at_char_boundary(first_sentence.trim_end(), MAX_SOURCE_SUMMARY_BYTES)
+}
+
 pub(crate) fn create_tool_search_tool(
     searchable_sources: &[ToolSearchSourceInfo],
     default_limit: usize,
@@ -75,8 +86,11 @@ pub(crate) fn create_tool_search_tool(
                     {
                         rendered.push_str(": ");
                         description_budget -= 2;
+                        // eslabon: one short line per source keeps the first request small;
+                        // the full tool descriptions arrive with the tools the search loads.
+                        let summary = source_summary(&description);
                         let bounded_description =
-                            take_bytes_at_char_boundary(&description, description_budget);
+                            take_bytes_at_char_boundary(summary, description_budget);
                         rendered.push_str(bounded_description);
                         description_budget -= bounded_description.len();
                     }
@@ -199,7 +213,9 @@ mod tests {
             .expect("tool search should retain its discovery instructions");
         assert!(source_descriptions.len() <= MAX_TOOL_SEARCH_SOURCE_DESCRIPTION_BYTES);
         assert!(source_descriptions.starts_with("- source-00: 🦀"));
-        assert!(source_descriptions.contains(&long_description));
+        // eslabon: each source shows a bounded summary, not its whole description.
+        assert!(source_descriptions.contains(source_summary(&long_description)));
+        assert!(!source_descriptions.contains(&long_description));
         let advertised_names = source_descriptions
             .lines()
             .map(|line| {
@@ -217,5 +233,15 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(advertised_names, expected_names);
         assert!(description.contains("always use `tool_search`"));
+    }
+
+    #[test]
+    fn source_summary_keeps_the_first_sentence_within_bounds() {
+        assert_eq!(
+            source_summary("Gmail tools for label counts. Use them to search mail."),
+            "Gmail tools for label counts."
+        );
+        assert_eq!(source_summary("No sentence break"), "No sentence break");
+        assert!(source_summary(&"a".repeat(1_000)).len() <= MAX_SOURCE_SUMMARY_BYTES);
     }
 }

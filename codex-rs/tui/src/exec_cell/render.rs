@@ -231,12 +231,18 @@ impl HistoryCell for ExecCell {
                 .hidden_details
                 .then_some(ActivityDisclosure::Generic);
         }
+        if crate::eslabon_stream::enabled() {
+            return self.eslabon_command_disclosure(width);
+        }
         self.command_disclosure(width)
     }
 
     fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         if self.group.calls.iter().any(ExecCall::is_user_shell_command) {
             return self.display_hyperlink_lines(width);
+        }
+        if crate::eslabon_stream::enabled() {
+            return self.eslabon_compact_lines(width);
         }
         if self.is_exploring_cell() {
             let mut lines = self.exploring_display_lines(width);

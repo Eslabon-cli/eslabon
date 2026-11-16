@@ -1,0 +1,24 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "eslabon-catalog"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "eslabon_catalog"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-http-client = { workspace = true }
+codex-models-manager = { workspace = true }
+codex-protocol = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -53,6 +53,8 @@ use crate::key_hint::KeyBindingListExt;
 use crate::motion::MotionMode;
 use crate::motion::shimmer_text;
 use crate::onboarding::bedrock::BedrockState;
+use crate::onboarding::eslabon_local::EslabonLocalSetup;
+use crate::onboarding::eslabon_local::LocalSetupState;
 use crate::onboarding::gcp::GcpState;
 use crate::onboarding::keys;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
@@ -91,6 +93,8 @@ pub(crate) enum SignInState {
     BedrockConfigured,
     Gcp(GcpState),
     GcpConfigured,
+    LocalSetup(LocalSetupState),
+    LocalConfigured,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,11 +105,15 @@ pub(crate) enum SignInOption {
     ApiKey,
     Bedrock,
     Gcp,
+    LocalServer,
 }
 
 impl SignInOption {
     fn is_alternative(self) -> bool {
-        !matches!(self, Self::ChatGpt | Self::DeviceCode | Self::OtherMethods)
+        !matches!(
+            self,
+            Self::ChatGpt | Self::DeviceCode | Self::OtherMethods | Self::LocalServer
+        )
     }
 }
 
@@ -198,6 +206,10 @@ impl KeyboardHandler for AuthModeWidget {
         {
             return;
         }
+        // eslabon: the local wizard owns navigation while it is open.
+        if self.handle_local_setup_key_event(&key_event) {
+            return;
+        }
         if self.handle_gcp_key_event(&key_event) || self.handle_bedrock_key_event(&key_event) {
             return;
         }
@@ -247,6 +259,17 @@ impl KeyboardHandler for AuthModeWidget {
             {
                 self.highlighted_mode = SignInOption::OtherMethods;
                 self.set_error(/*message*/ None);
+            } else if matches!(*self.sign_in_state.read().unwrap(), SignInState::PickMode)
+                && self.eslabon_local.is_some()
+            {
+                // eslabon: upstream's picker is mandatory; Eslabon's has no
+                // screen behind it, so Esc exits with the hint that names the
+                // non-interactive path.
+                self.set_error(Some(
+                    "Set up a provider with `eslabon init` or edit config.toml.".to_string(),
+                ));
+                self.exit_message =
+                    Some("Set up a provider with `eslabon init` or edit config.toml.".to_string());
             } else {
                 self.cancel_active_attempt();
             }
@@ -254,6 +277,9 @@ impl KeyboardHandler for AuthModeWidget {
     }
 
     fn handle_paste(&mut self, pasted: String) {
+        if self.handle_local_setup_paste(&pasted) {
+            return;
+        }
         let mut state = self.sign_in_state.write().unwrap();
         let input = match &mut *state {
             SignInState::Bedrock(state) => state.active_input_mut(),
@@ -288,6 +314,10 @@ pub(crate) struct AuthModeWidget {
     pub auth_config: AuthConfig,
     pub bedrock_setup_enabled: bool,
     pub gcp_setup_enabled: bool,
+    /// eslabon: Some only in Eslabon mode with no provider or OpenAI login.
+    pub(super) eslabon_local: Option<EslabonLocalSetup>,
+    /// eslabon: set when Esc in the picker must end onboarding with a hint.
+    pub(super) exit_message: Option<String>,
     pub animations_enabled: bool,
     pub animations_suppressed: Cell<bool>,
 }
@@ -330,7 +360,8 @@ impl AuthModeWidget {
         self.request_frame.schedule_frame();
     }
 
-    fn set_error(&self, message: Option<String>) {
+    // eslabon: the local wizard sets the picker's error from its own module.
+    pub(super) fn set_error(&self, message: Option<String>) {
         *self.error.write().unwrap() = message;
     }
 
@@ -344,6 +375,7 @@ impl AuthModeWidget {
             SignInState::ApiKeyEntry(_) => true,
             SignInState::Bedrock(state) => state.is_text_entry_active(),
             SignInState::Gcp(state) => state.is_text_entry_active(),
+            SignInState::LocalSetup(state) => state.is_text_entry_active(),
             _ => false,
         })
     }
@@ -357,6 +389,7 @@ impl AuthModeWidget {
             SignInState::ApiKeyEntry(state) => !state.value.is_empty(),
             SignInState::Bedrock(state) => state.is_text_entry_active(),
             SignInState::Gcp(state) => state.is_text_entry_active(),
+            SignInState::LocalSetup(state) => state.is_text_entry_active(),
             _ => false,
         })
     }
@@ -390,7 +423,12 @@ impl AuthModeWidget {
             }
             return options;
         }
-        let mut options = vec![SignInOption::ChatGpt];
+        // eslabon: a local server goes first so a first run never has to log in.
+        let mut options = Vec::new();
+        if self.eslabon_local.is_some() {
+            options.push(SignInOption::LocalServer);
+        }
+        options.push(SignInOption::ChatGpt);
         if self.is_chatgpt_login_allowed() {
             options.push(SignInOption::DeviceCode);
         }
@@ -428,6 +466,7 @@ impl AuthModeWidget {
         let options = self.displayed_sign_in_options();
         if let Some(option) = options.get(index).copied()
             && (option != SignInOption::ChatGpt || self.is_chatgpt_login_allowed())
+            && (option != SignInOption::LocalServer || self.eslabon_local.is_some())
         {
             self.highlighted_mode = option;
             self.activate_highlighted_mode(key_event);
@@ -486,6 +525,11 @@ impl AuthModeWidget {
                     self.disallow_api_login();
                 }
             }
+            SignInOption::LocalServer => {
+                if self.eslabon_local.is_some() {
+                    self.start_local_setup();
+                }
+            }
         }
     }
 
@@ -499,6 +543,14 @@ impl AuthModeWidget {
     fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
         let mut lines: Vec<Line> = if self.highlighted_mode.is_alternative() {
             vec!["  Sign in another way".into(), "".into()]
+        } else if self.eslabon_local.is_some() {
+            vec![
+                Line::from(vec![
+                    "  Choose how you want to use ".into(),
+                    codex_config::eslabon::marca::NOMBRE_PRODUCTO.bold(),
+                ]),
+                "".into(),
+            ]
         } else if self.bedrock_setup_enabled || self.gcp_setup_enabled {
             vec!["  Choose how you want to use Codex.".into(), "".into()]
         } else {
@@ -569,11 +621,18 @@ impl AuthModeWidget {
                     ));
                 }
                 SignInOption::ChatGpt => {
+                    // eslabon: the login is the secondary option, so it is
+                    // named after the account, not the product.
+                    let (texto, descripcion) = if self.eslabon_local.is_some() {
+                        ("Use an OpenAI account", chatgpt_description)
+                    } else {
+                        ("Sign in with ChatGPT", chatgpt_description)
+                    };
                     lines.extend(create_mode_item(
                         idx,
                         option,
-                        "Sign in with ChatGPT",
-                        chatgpt_description,
+                        texto,
+                        descripcion,
                     ));
                 }
                 SignInOption::DeviceCode => {
@@ -608,6 +667,19 @@ impl AuthModeWidget {
                         "Connect using your Google Cloud credentials",
                     ));
                 }
+                SignInOption::LocalServer => {
+                    let descripcion = self
+                        .eslabon_local
+                        .as_ref()
+                        .map(EslabonLocalSetup::etiqueta)
+                        .unwrap_or_default();
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        "Use a local server",
+                        &descripcion,
+                    ));
+                }
             }
             lines.push("".into());
         }
@@ -631,6 +703,13 @@ impl AuthModeWidget {
                 "  Press ".dim(),
                 self.cancel_binding().into(),
                 " to go back".dim(),
+            ]));
+        } else if self.eslabon_local.is_some() {
+            // eslabon: Esc used to be silent here (P5.2b); say what it does.
+            lines.push(Line::from(vec![
+                "  Press ".dim(),
+                self.cancel_binding().into(),
+                " to exit".dim(),
             ]));
         }
         if let Some(err) = self.error_message() {
@@ -1150,11 +1229,13 @@ impl StepStateProvider for AuthModeWidget {
             | SignInState::ChatGptDeviceCode(_)
             | SignInState::ChatGptSuccessMessage
             | SignInState::Bedrock(_)
-            | SignInState::Gcp(_) => StepState::InProgress,
+            | SignInState::Gcp(_)
+            | SignInState::LocalSetup(_) => StepState::InProgress,
             SignInState::ChatGptSuccess
             | SignInState::ApiKeyConfigured
             | SignInState::BedrockConfigured
-            | SignInState::GcpConfigured => StepState::Complete,
+            | SignInState::GcpConfigured
+            | SignInState::LocalConfigured => StepState::Complete,
         }
     }
 }
@@ -1199,6 +1280,12 @@ impl WidgetRef for AuthModeWidget {
                 Paragraph::new("✓ Amazon Bedrock configured".green())
                     .wrap(Wrap { trim: false })
                     .render(area, buf);
+            }
+            SignInState::LocalSetup(state) => {
+                state.render(area, buf);
+            }
+            SignInState::LocalConfigured => {
+                super::eslabon_local::render_local_configured(area, buf);
             }
         }
     }
@@ -1384,6 +1471,8 @@ mod tests {
             auth_config,
             bedrock_setup_enabled: false,
             gcp_setup_enabled: false,
+            eslabon_local: None,
+            exit_message: None,
             animations_enabled: true,
             animations_suppressed: std::cell::Cell::new(false),
         };
@@ -1809,3 +1898,6 @@ mod activation_key_tests;
 #[cfg(test)]
 #[path = "gcp_tests.rs"]
 mod gcp_tests;
+
+#[path = "eslabon_local_tests.rs"]
+mod eslabon_local_tests;

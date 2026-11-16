@@ -679,7 +679,10 @@ async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config
         }
     };
 
-    match Config::load_with_cli_overrides(cli_overrides).await {
+    // eslabon: login/logout are an explicit user request to use OpenAI, so the
+    // origin rule must not block `auth.openai.com`. It travels as an override in the
+    // load (never as argv read inside `core`).
+    match Config::load_with_cli_overrides_permitiendo_openai(cli_overrides).await {
         Ok(config) => match config.auth_config().validate() {
             Ok(()) => config,
             Err(e) => {

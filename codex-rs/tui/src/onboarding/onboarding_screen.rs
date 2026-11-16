@@ -99,6 +99,8 @@ pub(crate) struct OnboardingScreen {
     remote_trust_key: Option<String>,
     is_done: bool,
     should_exit: bool,
+    // eslabon: the hint the local picker prints when Esc is the only escape.
+    exit_message: Option<String>,
 }
 
 pub(crate) struct OnboardingScreenArgs {
@@ -111,12 +113,15 @@ pub(crate) struct OnboardingScreenArgs {
     pub app_server_target: crate::AppServerTarget,
     pub app_server_request_handle: Option<AppServerRequestHandle>,
     pub config: Config,
+    /// eslabon: detected local servers; None keeps upstream's onboarding.
+    pub eslabon_local: Option<Vec<eslabon_config::detector::ServidorLocal>>,
 }
 
 #[derive(Default)]
 pub(crate) struct OnboardingResult {
     pub directory_trust_persisted: bool,
     pub should_exit: bool,
+    pub exit_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -139,7 +144,12 @@ impl OnboardingScreen {
             app_server_target,
             app_server_request_handle,
             config,
+            eslabon_local,
         } = args;
+        let eslabon_local = eslabon_local.map(|servidores| super::eslabon_local::EslabonLocalSetup {
+            codigo_home: config.codex_home.to_path_buf(),
+            servidores,
+        });
         let local_settings = crate::local_settings::LocalSettings::from(&config);
         let cwd = config.cwd.to_path_buf();
         let remote_trust_key = remote_project_trust
@@ -175,6 +185,12 @@ impl OnboardingScreen {
                 } else {
                     SignInOption::OtherMethods
                 };
+            // eslabon: with a local option the wizard is the first choice.
+            let highlighted_mode = if eslabon_local.is_some() {
+                SignInOption::LocalServer
+            } else {
+                highlighted_mode
+            };
             if let Some(app_server_request_handle) = app_server_request_handle {
                 steps.push(Step::Auth(AuthModeWidget {
                     request_frame: tui.frame_requester(),
@@ -188,6 +204,8 @@ impl OnboardingScreen {
                     auth_config,
                     bedrock_setup_enabled,
                     gcp_setup_enabled,
+                    eslabon_local,
+                    exit_message: None,
                     animations_enabled: local_settings.tui.animations
                         && local_settings.tui.effects.shimmer,
                     animations_suppressed: std::cell::Cell::new(false),
@@ -230,6 +248,7 @@ impl OnboardingScreen {
             remote_trust_key,
             is_done: false,
             should_exit: false,
+            exit_message: None,
         }
     }
 
@@ -313,6 +332,13 @@ impl OnboardingScreen {
         })
     }
 
+    fn take_auth_exit_message(&mut self) -> Option<String> {
+        self.steps.iter_mut().find_map(|step| match step {
+            Step::Auth(widget) => widget.exit_message.take(),
+            Step::Welcome(_) | Step::TrustDirectory(_) | Step::GovCloudGuidance { .. } => None,
+        })
+    }
+
     fn handle_app_server_notification(&mut self, notification: ServerNotification) {
         match notification {
             ServerNotification::AccountLoginCompleted(notification) => {
@@ -388,6 +414,12 @@ impl KeyboardHandler for OnboardingScreen {
             }
             if let Some(active_step) = self.current_steps_mut().into_iter().last() {
                 active_step.handle_key_event(key_event);
+            }
+            // eslabon: Esc at the picker's root ends onboarding with a hint.
+            if let Some(message) = self.take_auth_exit_message() {
+                self.exit_message = Some(message);
+                self.should_exit = true;
+                self.is_done = true;
             }
             if self.steps.iter().any(|step| {
                 if let Step::TrustDirectory(widget) = step {
@@ -578,6 +610,7 @@ pub(crate) async fn run_gov_cloud_guidance(tui: &mut Tui) -> Result<()> {
         remote_trust_key: None,
         is_done: false,
         should_exit: false,
+        exit_message: None,
     };
     let result = run_onboarding_screen(
         screen, /*app_server_request_handle*/ None, /*app_server*/ None, tui,
@@ -800,6 +833,7 @@ async fn run_onboarding_screen_inner(
     Ok(OnboardingResult {
         directory_trust_persisted,
         should_exit: onboarding_screen.should_exit(),
+        exit_message: onboarding_screen.exit_message.clone(),
     })
 }
 
@@ -978,8 +1012,8 @@ mod tests {
             remote_trust_key: None,
             is_done: false,
             should_exit: false,
+            exit_message: None,
         };
-
         let mut buffered_keys = vec![KeyEvent::from(KeyCode::Enter)];
         let mut trust_step_was_active = false;
         let mut drain_count = 0;
@@ -1045,6 +1079,7 @@ mod tests {
                 remote_trust_key: Some("/workspace/project".to_string()),
                 is_done: false,
                 should_exit: false,
+                exit_message: None,
             };
             screen.handle_key_event(key.into());
             assert!(!persist_selected_trust(&mut screen, /*request_handle*/ None).await);
@@ -1076,6 +1111,7 @@ mod tests {
             remote_trust_key: None,
             is_done: false,
             should_exit: false,
+            exit_message: None,
         };
 
         let persisted =

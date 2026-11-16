@@ -1,4 +1,5 @@
 mod compact;
+mod eslabon;
 mod live_output;
 mod model;
 mod render;

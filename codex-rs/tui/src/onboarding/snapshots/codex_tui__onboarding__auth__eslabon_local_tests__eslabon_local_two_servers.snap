@@ -1,0 +1,16 @@
+---
+source: tui/src/onboarding/eslabon_local_tests.rs
+expression: terminal.backend().to_string()
+---
+> Set up a local server
+
+  Found 2 local servers. Choose one, or enter its URL.
+
+> 1. Ollama — http://127.0.0.1:11434/v1
+     Models: 1 model: qwen3:8b
+  2. LM Studio — http://127.0.0.1:1234/v1
+     Models: 1 model: local-model
+  3. Enter a server URL
+     Chat completions API, base URL ending in /v1
+
+  Press enter to choose · esc to go back

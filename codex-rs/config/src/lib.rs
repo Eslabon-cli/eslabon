@@ -14,6 +14,8 @@ mod config_server;
 pub mod config_toml;
 mod constraint;
 mod diagnostics;
+// eslabon: single "Eslabon mode" detection, read by codex-cli and codex-core.
+pub mod eslabon;
 mod filesystem_constraints;
 mod fingerprint;
 mod guardian;

@@ -1149,6 +1149,9 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
     },
 
+    /// eslabon: actions requested from the sidebar menus.
+    Eslabon(crate::eslabon_sidebar::SidebarEvent),
+
     McpLoginStarted {
         request_id: String,
         result: Result<McpServerOauthLoginResponse, String>,

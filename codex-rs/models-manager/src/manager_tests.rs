@@ -1897,3 +1897,82 @@ fn bundled_models_json_roundtrips() {
         "bundled models.json should contain at least one model"
     );
 }
+
+// eslabon: P5.3 — the conservative profile for a model no catalog knows.
+#[test]
+fn unknown_model_in_eslabon_mode_gets_the_conservative_chat_profile() {
+    let resolved = construct_model_info_con(
+        "humo-1",
+        /*remote*/ None,
+        &ModelsManagerConfig::default(),
+        /*eslabon*/ true,
+    );
+
+    assert_eq!(resolved.slug, "humo-1");
+    assert_eq!(
+        resolved.origin,
+        ModelOrigin::Bundled,
+        "the profile must not look like synthetic fallback metadata"
+    );
+    assert_eq!(
+        resolved.context_window,
+        Some(crate::model_info::CONTEXTO_POR_DEFECTO)
+    );
+    assert_eq!(resolved.max_context_window, None);
+    assert_eq!(
+        resolved.auto_compact_token_limit(),
+        Some(crate::model_info::CONTEXTO_POR_DEFECTO * 9 / 10)
+    );
+    assert!(!resolved.supports_reasoning_summary_parameter);
+    assert!(
+        resolved.supported_reasoning_levels.is_empty(),
+        "a chat server gets no OpenAI reasoning levels"
+    );
+    assert_eq!(resolved.default_reasoning_level, None);
+    assert_eq!(
+        resolved.apply_patch_tool_type,
+        Some(codex_protocol::openai_models::ApplyPatchToolType::Freeform)
+    );
+    assert!(resolved.supports_search_tool);
+}
+
+// eslabon: P5.3 — an explicit user value wins over the default profile.
+#[test]
+fn user_context_and_compaction_win_over_the_eslabon_profile() {
+    let config = ModelsManagerConfig {
+        model_context_window: Some(131_072),
+        model_auto_compact_token_limit: Some(100_000),
+        ..Default::default()
+    };
+
+    let resolved = construct_model_info_con("humo-1", /*remote*/ None, &config, /*eslabon*/ true);
+
+    assert_eq!(
+        resolved.context_window,
+        Some(131_072),
+        "the default profile must not clamp a user-raised window"
+    );
+    assert_eq!(resolved.auto_compact_token_limit(), Some(100_000));
+}
+
+// eslabon: P5.3 — outside Eslabon mode the metadata is exactly upstream's fallback.
+#[test]
+fn unknown_model_outside_eslabon_mode_keeps_the_upstream_fallback() {
+    let resolved = construct_model_info_con(
+        "humo-1",
+        /*remote*/ None,
+        &ModelsManagerConfig::default(),
+        /*eslabon*/ false,
+    );
+
+    assert_eq!(resolved.origin, ModelOrigin::Synthetic);
+    assert_eq!(resolved.context_window, Some(272_000));
+    assert_eq!(resolved.max_context_window, Some(272_000));
+    assert!(resolved.supports_reasoning_summary_parameter);
+    assert_eq!(
+        resolved.default_reasoning_summary,
+        codex_protocol::config_types::ReasoningSummary::Auto
+    );
+    assert_eq!(resolved.apply_patch_tool_type, None);
+    assert!(!resolved.supports_search_tool);
+}

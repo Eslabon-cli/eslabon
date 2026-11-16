@@ -31,6 +31,9 @@ impl HistoryCell for PatchHistoryCell {
     }
 
     fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        if crate::eslabon_stream::enabled() {
+            return crate::eslabon_stream::patch_rows(&self.changes, &self.cwd, width);
+        }
         crate::diff_render::create_diff_preview_with_links(
             &self.changes,
             &self.cwd,

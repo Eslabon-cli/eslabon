@@ -95,7 +95,13 @@ impl SlashCommand {
             SlashCommand::Config => "configure Codex preferences",
             SlashCommand::Feedback => "send logs to maintainers",
             SlashCommand::New => "start a new chat during a conversation",
-            SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
+            SlashCommand::Init => {
+                if crate::eslabon_stream::branded() {
+                    "create an AGENTS.md file with instructions for Eslabon"
+                } else {
+                    "create an AGENTS.md file with instructions for Codex"
+                }
+            }
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Recap => "summarize the current conversation now",
             SlashCommand::Review => "review my current changes and find issues",
@@ -146,7 +152,13 @@ impl SlashCommand {
             SlashCommand::Side | SlashCommand::Btw => {
                 "start a side conversation in an ephemeral fork"
             }
-            SlashCommand::Permissions => "choose what Codex is allowed to do",
+            SlashCommand::Permissions => {
+                if crate::eslabon_stream::branded() {
+                    "choose what Eslabon is allowed to do"
+                } else {
+                    "choose what Codex is allowed to do"
+                }
+            }
             SlashCommand::Keymap => "remap TUI shortcuts",
             SlashCommand::Vim => "toggle Vim mode for the composer",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",

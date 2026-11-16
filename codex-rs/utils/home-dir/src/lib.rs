@@ -2,6 +2,17 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
 use std::path::PathBuf;
 
+mod eslabon;
+
+pub use eslabon::ESLABON_HOME_DIR_NAME;
+pub use eslabon::ESLABON_HOME_ENV;
+pub use eslabon::find_codex_home_desde;
+pub use eslabon::home_dir_usuario;
+pub use eslabon::home_eslabon_bruto;
+pub use eslabon::modo_eslabon;
+pub use eslabon::modo_eslabon_desde;
+pub use eslabon::resolver_home;
+
 /// Returns the path to the Codex configuration directory, which can be
 /// specified by the `CODEX_HOME` environment variable. If not set, defaults to
 /// `~/.codex`.
@@ -11,6 +22,11 @@ use std::path::PathBuf;
 /// - If `CODEX_HOME` is not set, this function does not verify that the
 ///   directory exists.
 pub fn find_codex_home() -> std::io::Result<AbsolutePathBuf> {
+    // eslabon: in Eslabon mode the module resolves ESLABON_HOME and creates the home.
+    if modo_eslabon() {
+        return eslabon::find_codex_home_eslabon();
+    }
+
     let codex_home_env = std::env::var("CODEX_HOME")
         .ok()
         .filter(|val| !val.is_empty());

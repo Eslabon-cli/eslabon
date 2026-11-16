@@ -1073,6 +1073,7 @@ impl RealtimeWebsocketClient {
         session_initialization: RealtimeSessionInitialization,
         transcript_state: RealtimeTranscriptState,
     ) -> Result<RealtimeWebsocketConnection, ApiError> {
+        crate::eslabon_policy::check_egress(ws_url.as_str())?;
         ensure_rustls_crypto_provider();
 
         let mut request = ws_url

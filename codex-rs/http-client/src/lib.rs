@@ -9,6 +9,7 @@ mod client_builder;
 mod client_tls;
 mod custom_ca;
 mod error;
+pub mod eslabon_policy;
 mod native_roots;
 mod network_policy;
 mod openai_endpoints;

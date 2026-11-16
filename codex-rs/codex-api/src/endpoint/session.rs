@@ -88,6 +88,7 @@ impl<T: HttpTransport> EndpointSession<T> {
     where
         C: Fn(&mut Request),
     {
+        crate::eslabon_policy::check_egress(&self.provider.url_for_path(path))?;
         let body = body.map(RequestBody::Json);
         let make_request = || {
             let mut req = self.make_request(&method, path, &extra_headers, body.as_ref());
@@ -130,6 +131,7 @@ impl<T: HttpTransport> EndpointSession<T> {
     where
         C: Fn(&mut Request),
     {
+        crate::eslabon_policy::check_egress(&self.provider.url_for_path(path))?;
         let body = body.map(RequestBody::EncodedJson);
         let mut request = self.make_request(&method, path, &extra_headers, body.as_ref());
         configure(&mut request);

@@ -473,6 +473,12 @@ impl ResponsesWebsocketClient {
                     ResponsesWebsocketProbeFailureStage::Unknown,
                 )
             })?;
+        if let Err(err) = crate::eslabon_policy::check_egress(ws_url.as_str()) {
+            return Err(ResponsesWebsocketProbeError::before_upgrade(
+                err,
+                ResponsesWebsocketProbeFailureStage::Unknown,
+            ));
+        }
 
         let headers = merge_request_headers(&self.provider.headers, extra_headers, default_headers);
         let headers = self.auth.apply_auth_headers(headers).await.map_err(|err| {

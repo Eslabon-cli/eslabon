@@ -1,0 +1,22 @@
+---
+source: tui/src/onboarding/eslabon_local_tests.rs
+expression: terminal.backend().to_string()
+---
+  Choose how you want to use Eslabon
+
+> 1. Use a local server
+     Ollama · 1 model
+
+  2. Use an OpenAI account
+     Usage included with Plus, Pro, Business, and Enterprise plans
+
+  3. Sign in with Device Code
+     Sign in from another device with a one-time code
+
+  4. Sign in another way
+     Use an OpenAI API key
+
+  Press enter to continue
+  Press esc to exit
+
+Set up a provider with `eslabon init` or edit config.toml.

@@ -2,6 +2,7 @@
 
 mod accounting;
 mod analytics;
+mod eslabon_verify;
 mod api;
 mod events;
 mod extension;

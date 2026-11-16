@@ -1,0 +1,22 @@
+---
+source: tui/src/eslabon_sidebar.rs
+expression: "render_to_string(&collapsed, 18)"
+---
+│ qwen3.8-flash-next-coder
+│ local · medium
+│
+│ Context
+│ 42.5K / 131K 32%
+│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+│ cache 95% · 40.2K of 42.5K
+│ session in 95K · out 1.2K
+│ session cache 84%
+│
+│ ▶ MCP (1 active, 1 error)
+│
+│ Data lock ● on · local/BAA only
+│
+│ …sting/eslabon/codex-rs:eslabon
+│
+│
+│

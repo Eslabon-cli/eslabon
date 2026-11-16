@@ -3,6 +3,7 @@
 use codex_api::is_azure_responses_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::RemoteCompactionSupport;
+use codex_model_provider_info::WireApi;
 
 /// Optional provider-backed features that Codex may expose at runtime.
 ///
@@ -40,6 +41,10 @@ impl ProviderCapabilities {
             } else {
                 RemoteCompactionSupport::Unsupported
             },
+            // eslabon: hosted tools (web search, image generation) only exist on the
+            // Responses API; Chat Completions providers never execute them.
+            image_generation: info.wire_api != WireApi::Chat,
+            web_search: info.wire_api != WireApi::Chat,
             ..Self::default()
         };
         let overrides = info.capabilities.unwrap_or_default();
@@ -47,9 +52,14 @@ impl ProviderCapabilities {
             external_web_access: overrides
                 .external_web_access
                 .unwrap_or(defaults.external_web_access),
-            remote_compaction: overrides
-                .remote_compaction
-                .unwrap_or(defaults.remote_compaction),
+            // eslabon: compaction endpoints only exist on the Responses API.
+            remote_compaction: if info.wire_api == WireApi::Chat {
+                RemoteCompactionSupport::Unsupported
+            } else {
+                overrides
+                    .remote_compaction
+                    .unwrap_or(defaults.remote_compaction)
+            },
             ..defaults
         }
     }

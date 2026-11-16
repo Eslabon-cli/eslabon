@@ -67,6 +67,7 @@ impl RouteAwareClientPool {
             .http_client_factory
             .network_policy()
             .acquire(request.request.url())?;
+        crate::eslabon_policy::check(request.request.url().as_str())?;
         permit
             .run(Box::pin(self.send_authorized(request, resolve_route)))
             .await?
@@ -98,6 +99,7 @@ impl RouteAwareClientPool {
                 .http_client_factory
                 .network_policy()
                 .acquire(&current_url)?;
+            crate::eslabon_policy::check(current_url.as_str())?;
             let hop = async {
                 let (current_route, mut client, selected_tls_backend) = self
                     .client_for_url_with_resolver(current_url.as_str(), &resolve_route)

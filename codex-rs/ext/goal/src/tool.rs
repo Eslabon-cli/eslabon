@@ -66,6 +66,9 @@ struct GoalToolResponse {
     goal: Option<ThreadGoal>,
     remaining_tokens: Option<i64>,
     completion_budget_report: Option<String>,
+    /// eslabon: evidence from the goal's `[verify: ...]` command, when it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verification: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -209,6 +212,12 @@ impl GoalToolExecutor {
         request.objective = request.objective.trim().to_string();
         validate_thread_goal_objective(&request.objective)
             .map_err(FunctionCallError::RespondToModel)?;
+        if request.objective.contains(crate::eslabon_verify::VERIFY_MARKER) {
+            return Err(FunctionCallError::RespondToModel(
+                "Only the user can attach a `[verify: ...]` command to a goal; create the goal without it."
+                    .to_string(),
+            ));
+        }
         request.token_budget = request.token_budget.or(self.max_goal_token_budget);
         validate_goal_budget(request.token_budget, self.max_goal_token_budget)
             .map_err(FunctionCallError::RespondToModel)?;
@@ -248,7 +257,7 @@ impl GoalToolExecutor {
         &self,
         invocation: ToolCall<'_>,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        let args: UpdateGoalArgs = parse_arguments(invocation.function_arguments()?)?;
+        let mut args: UpdateGoalArgs = parse_arguments(invocation.function_arguments()?)?;
         if !matches!(
             args.status,
             ThreadGoalStatus::Complete | ThreadGoalStatus::Blocked | ThreadGoalStatus::Paused
@@ -258,6 +267,12 @@ impl GoalToolExecutor {
                     .to_string(),
             ));
         }
+
+        let verification = if args.status == ThreadGoalStatus::Complete {
+            self.verify_before_completing(&invocation, &mut args).await?
+        } else {
+            None
+        };
 
         self.account_active_goal_progress(
             match args.status {
@@ -307,14 +322,75 @@ impl GoalToolExecutor {
         let goal = protocol_goal_from_state(goal);
         let turn_id = self.accounting_state.clear_current_turn_goal();
         self.emit_goal_updated_from_tool_call(&invocation, turn_id, goal.clone());
-        goal_response(
+        goal_response_with_verification(
             Some(goal),
             if args.status == ThreadGoalStatus::Complete {
                 CompletionBudgetReport::Include
             } else {
                 CompletionBudgetReport::Omit
             },
+            verification,
         )
+    }
+
+    /// eslabon: runs the goal's `[verify: ...]` command before it may complete.
+    ///
+    /// On failure the call is rejected with the evidence and the goal stays active;
+    /// after too many failures the status becomes `blocked` for the user.
+    async fn verify_before_completing(
+        &self,
+        invocation: &ToolCall<'_>,
+        args: &mut UpdateGoalArgs,
+    ) -> Result<Option<String>, FunctionCallError> {
+        use crate::eslabon_verify::MAX_FAILED_VERIFICATIONS;
+        let goal = self
+            .state_db
+            .thread_goals()
+            .get_thread_goal(self.thread_id)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("failed to read goal: {err}"))
+            })?;
+        let Some(goal) = goal else {
+            return Ok(None);
+        };
+        // Only an active goal is verified; a blocked one waits for the user.
+        if goal.status != codex_state::ThreadGoalStatus::Active {
+            return Ok(None);
+        }
+        let Some(command) = crate::eslabon_verify::extract_verifier(&goal.objective) else {
+            return Ok(None);
+        };
+        let cwd = invocation
+            .environments
+            .first()
+            .and_then(|environment| environment.cwd.to_abs_path().ok())
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "This goal has a verifier, but the turn has no local working directory to run it in; the goal stays active."
+                        .to_string(),
+                )
+            })?;
+        let outcome = crate::eslabon_verify::run_verifier(&command, cwd.as_path()).await;
+        if outcome.passed() {
+            crate::eslabon_verify::clear_failures(&goal.goal_id);
+            return Ok(Some(format!("passed: {}", outcome.summary())));
+        }
+        let failures = crate::eslabon_verify::record_failure(&goal.goal_id);
+        if failures < MAX_FAILED_VERIFICATIONS {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "Goal not completed: verification failed ({}), attempt {failures} of {MAX_FAILED_VERIFICATIONS}.\n{}\n\nThe goal stays active. Fix the cause, then call update_goal with status \"complete\" again.",
+                outcome.summary(),
+                outcome.output_tail,
+            )));
+        }
+        crate::eslabon_verify::clear_failures(&goal.goal_id);
+        args.status = ThreadGoalStatus::Blocked;
+        Ok(Some(format!(
+            "failed {failures} times; goal marked blocked for the user. Last: {}\n{}",
+            outcome.summary(),
+            outcome.output_tail,
+        )))
     }
 
     fn emit_goal_updated_from_tool_call(
@@ -448,7 +524,17 @@ fn goal_response(
     goal: Option<ThreadGoal>,
     completion_budget_report: CompletionBudgetReport,
 ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-    let value = serde_json::to_value(GoalToolResponse::new(goal, completion_budget_report))
+    goal_response_with_verification(goal, completion_budget_report, /*verification*/ None)
+}
+
+fn goal_response_with_verification(
+    goal: Option<ThreadGoal>,
+    completion_budget_report: CompletionBudgetReport,
+    verification: Option<String>,
+) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+    let mut response = GoalToolResponse::new(goal, completion_budget_report);
+    response.verification = verification;
+    let value = serde_json::to_value(response)
         .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
     Ok(Box::new(JsonToolOutput::new(value)))
 }
@@ -470,6 +556,7 @@ impl GoalToolResponse {
             goal,
             remaining_tokens,
             completion_budget_report,
+            verification: None,
         }
     }
 }

@@ -2102,3 +2102,168 @@ fn protocol_status(status: codex_state::ThreadGoalStatus) -> ThreadGoalStatus {
         codex_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
     }
 }
+
+// ---------------------------------------------------------------------------
+// eslabon: a goal with `[verify: ...]` only completes when its command passes.
+// ---------------------------------------------------------------------------
+mod eslabon_verify {
+    use super::*;
+    use codex_exec_server::FileSystemEnvironmentAccessor;
+    use codex_exec_server::LOCAL_FS;
+    use codex_tools::ToolEnvironment;
+    use codex_utils_path_uri::PathUri;
+    use pretty_assertions::assert_eq;
+
+    fn update_complete<'call>(
+        call_id: &str,
+        environments: Vec<ToolEnvironment<'call>>,
+    ) -> ToolCall<'call> {
+        ToolCall {
+            turn_id: "turn-1".to_string(),
+            call_id: call_id.to_string(),
+            tool_name: codex_extension_api::ToolName::plain("update_goal"),
+            model: "gpt-test".to_string(),
+            codex_turn_metadata: None,
+            truncation_policy: TruncationPolicy::Bytes(4096),
+            source: ToolCallSource::Direct,
+            conversation_history: codex_extension_api::ConversationHistory::default(),
+            turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+            environments,
+            payload: ToolPayload::Function {
+                arguments: json!({ "status": "complete" }).to_string(),
+            },
+        }
+    }
+
+    async fn seed_goal(
+        runtime: &codex_state::StateRuntime,
+        thread_id: ThreadId,
+        objective: &str,
+    ) -> anyhow::Result<()> {
+        runtime
+            .thread_goals()
+            .insert_thread_goal(
+                thread_id,
+                objective,
+                codex_state::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await?
+            .expect("goal inserted");
+        Ok(())
+    }
+
+    async fn status(runtime: &codex_state::StateRuntime, thread_id: ThreadId) -> String {
+        let goal = runtime
+            .thread_goals()
+            .get_thread_goal(thread_id)
+            .await
+            .expect("read goal")
+            .expect("goal exists");
+        format!("{:?}", goal.status)
+    }
+
+    #[tokio::test]
+    async fn failing_verifier_keeps_the_goal_active_then_passing_completes_it() -> anyhow::Result<()> {
+        let runtime = test_runtime().await?;
+        let thread_id = test_thread_id()?;
+        seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+        let workdir = tempfile::tempdir()?;
+        seed_goal(
+            runtime.as_ref(),
+            thread_id,
+            "Produce the report [verify: test -f report.txt && cat report.txt]",
+        )
+        .await?;
+        let harness = GoalExtensionHarness::new(Arc::clone(&runtime), thread_id).await?;
+        let tools = harness.tools();
+        let update = tool_by_name(&tools, "update_goal");
+        let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
+        let cwd = PathUri::from_host_native_path(workdir.path())?;
+        let env = || vec![ToolEnvironment::new("local".to_string(), cwd.clone(), &access)];
+
+        // The model claims success before the evidence exists.
+        let err = match update.handle(update_complete("call-1", env())).await {
+            Ok(_) => panic!("completion must be rejected while the verifier fails"),
+            Err(err) => err,
+        };
+        let FunctionCallError::RespondToModel(message) = err else {
+            panic!("expected a model-facing rejection, got {err:?}");
+        };
+        assert!(message.contains("verification failed"), "{message}");
+        assert!(message.contains("attempt 1 of 5"), "{message}");
+        assert_eq!(status(runtime.as_ref(), thread_id).await, "Active");
+
+        // After doing the work, completion passes and carries the evidence.
+        std::fs::write(workdir.path().join("report.txt"), "all green")?;
+        let invocation = update_complete("call-2", env());
+        let output = update.handle(invocation.clone()).await?;
+        let result = output.code_mode_result(&invocation.payload);
+        assert_eq!(json!("complete"), result["goal"]["status"]);
+        let verification = result["verification"].as_str().expect("verification evidence");
+        assert!(verification.starts_with("passed:"), "{verification}");
+        assert_eq!(status(runtime.as_ref(), thread_id).await, "Complete");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repeated_failures_block_the_goal_for_the_user() -> anyhow::Result<()> {
+        let runtime = test_runtime().await?;
+        let thread_id = ThreadId::from_string("22222222-2222-4222-8222-222222222222")
+            .map_err(anyhow::Error::msg)?;
+        seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+        let workdir = tempfile::tempdir()?;
+        seed_goal(runtime.as_ref(), thread_id, "Never passes [verify: exit 1]").await?;
+        let harness = GoalExtensionHarness::new(Arc::clone(&runtime), thread_id).await?;
+        let tools = harness.tools();
+        let update = tool_by_name(&tools, "update_goal");
+        let access = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
+        let cwd = PathUri::from_host_native_path(workdir.path())?;
+
+        for attempt in 1..5 {
+            let env = vec![ToolEnvironment::new("local".to_string(), cwd.clone(), &access)];
+            assert!(
+                update
+                    .handle(update_complete(&format!("call-{attempt}"), env))
+                    .await
+                    .is_err()
+            );
+        }
+        let env = vec![ToolEnvironment::new("local".to_string(), cwd.clone(), &access)];
+        let invocation = update_complete("call-5", env);
+        let output = update.handle(invocation.clone()).await?;
+        let result = output.code_mode_result(&invocation.payload);
+        assert_eq!(json!("blocked"), result["goal"]["status"]);
+        assert!(
+            result["verification"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("failed 5 times")),
+            "{result}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_model_cannot_attach_a_verifier() -> anyhow::Result<()> {
+        let runtime = test_runtime().await?;
+        let thread_id = ThreadId::from_string("33333333-3333-4333-8333-333333333333")
+            .map_err(anyhow::Error::msg)?;
+        seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+        let harness = GoalExtensionHarness::new(runtime, thread_id).await?;
+        let tools = harness.tools();
+        let create = tool_by_name(&tools, "create_goal");
+        let err = match create
+            .handle(tool_call(
+                "create_goal",
+                "call-create",
+                json!({ "objective": "Tidy up [verify: rm -rf ~]" }),
+            ))
+            .await
+        {
+            Ok(_) => panic!("model-authored verifiers must be rejected"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, FunctionCallError::RespondToModel(message) if message.contains("Only the user")));
+        Ok(())
+    }
+}

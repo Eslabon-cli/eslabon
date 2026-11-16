@@ -57,6 +57,7 @@ use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
 use codex_api::ResponsesApiRequest;
+use codex_api::ChatClient as ApiChatClient;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
 use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
@@ -1922,6 +1923,13 @@ impl ResponsesHttpExecutor<'_> {
             .map(AuthManager::unauthorized_recovery);
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
+        // eslabon: Chat Completions providers share this whole path; only the
+        // endpoint and the wire client differ.
+        let wire_api = self.client.state.provider.info().wire_api;
+        let api_path = match wire_api {
+            WireApi::Responses => "/responses",
+            WireApi::Chat => "/chat/completions",
+        };
         loop {
             let client_setup = self
                 .client
@@ -1941,8 +1949,8 @@ impl ResponsesHttpExecutor<'_> {
             let responses_headers = self
                 .client
                 .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
-            tracing::Span::current().record("api.path", "/responses");
-            let transport = client_setup.build_api_transport("/responses")?;
+            tracing::Span::current().record("api.path", api_path);
+            let transport = client_setup.build_api_transport(api_path)?;
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),
@@ -1953,7 +1961,7 @@ impl ResponsesHttpExecutor<'_> {
             let (request_telemetry, sse_telemetry) = ModelClientSession::build_streaming_telemetry(
                 session_telemetry,
                 request_auth_context,
-                RequestRouteTelemetry::for_endpoint("/responses"),
+                RequestRouteTelemetry::for_endpoint(api_path),
                 self.client.state.auth_env_telemetry.clone(),
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
@@ -2020,13 +2028,24 @@ impl ResponsesHttpExecutor<'_> {
                 request.input = input;
             }
             inference_trace_attempt.record_started(&request);
-            let client = ApiResponsesClient::new(
-                transport,
-                client_setup.api_provider,
-                client_setup.api_auth,
-            )
-            .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-            let stream_result = client.stream_request(request, options).await;
+            let stream_result = match wire_api {
+                WireApi::Responses => {
+                    ApiResponsesClient::new(
+                        transport,
+                        client_setup.api_provider,
+                        client_setup.api_auth,
+                    )
+                    .with_telemetry(Some(request_telemetry), Some(sse_telemetry))
+                    .stream_request(request, options)
+                    .await
+                }
+                WireApi::Chat => {
+                    ApiChatClient::new(transport, client_setup.api_provider, client_setup.api_auth)
+                        .with_telemetry(Some(request_telemetry), Some(sse_telemetry))
+                        .stream_request(request, options)
+                        .await
+                }
+            };
 
             match stream_result {
                 Ok(stream) => {
@@ -2534,6 +2553,25 @@ impl ModelClientSession {
                     }
                 }
 
+                ResponsesHttpExecutor::new(&self.client)
+                    .stream_responses_http(
+                        &self.turn_state,
+                        /*expected_auth_owner*/ None,
+                        self.client.event_sender.as_ref(),
+                        prompt,
+                        model_info,
+                        session_telemetry,
+                        effort,
+                        summary,
+                        service_tier,
+                        responses_metadata,
+                        inference_trace,
+                    )
+                    .await
+            }
+            // eslabon: Chat Completions has no websocket transport; it goes straight to the
+            // shared HTTP executor, which picks /chat/completions from the provider's wire_api.
+            WireApi::Chat => {
                 ResponsesHttpExecutor::new(&self.client)
                     .stream_responses_http(
                         &self.turn_state,

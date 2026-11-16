@@ -1,0 +1,35 @@
+name: humo
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  humo:
+    name: humo (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-14
+          - ubuntu-24.04
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      RUST_MIN_STACK: "8388608"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build lean release binary
+        working-directory: codex-rs
+        run: cargo build --release --locked -p codex-cli --bin codex
+      - name: Run smoke harness
+        run: bash scripts/eslabon/humo/humo.sh codex-rs/target/release/codex

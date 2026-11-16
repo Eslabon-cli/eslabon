@@ -41,7 +41,7 @@ impl ChatWidget {
         let mut config = config;
         config.model = model.clone();
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
-        let placeholder = PLACEHOLDER.to_string();
+        let placeholder = crate::eslabon_stream::ask_placeholder().to_string();
         let side_placeholder = SIDE_PLACEHOLDER.to_string();
 
         let model_override = model.as_deref();
@@ -208,6 +208,14 @@ impl ChatWidget {
             mcp_startup_allow_terminal_only_next_round: false,
             mcp_startup_pending_next_round: HashMap::new(),
             mcp_startup_pending_next_round_saw_starting: false,
+            eslabon_mcp_states: std::collections::BTreeMap::new(),
+            eslabon_sidebar_hits: Vec::new(),
+            eslabon_mcp_collapsed: false,
+            eslabon_mcp_reload_in_flight: false,
+            eslabon_speed: crate::eslabon_speed::SpeedMeter::default(),
+            eslabon_approval_detail: None,
+            eslabon_published_state: None,
+            eslabon_last_stream_error: None,
             connectors: ConnectorsState::default(),
             ide_context: IdeContextState::default(),
             plugins_cache: PluginsCacheState::default(),

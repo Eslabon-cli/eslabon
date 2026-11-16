@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a problem with Eslabon
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Remove keys, credentials and personal data from
+        anything you paste here.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: The error, what you expected, and the steps to reproduce it.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Eslabon version
+      description: Output of `eslabon --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+        - Other
+    validations:
+      required: true

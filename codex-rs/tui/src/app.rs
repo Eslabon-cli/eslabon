@@ -208,6 +208,7 @@ pub(crate) mod agents_overview_discovery;
 mod agents_overview_threads;
 mod agents_overview_usage;
 mod agents_overview_view;
+mod eslabon_sidebar_events;
 pub(crate) use agents_overview::AGENTS_OVERVIEW_VIEW_ID;
 mod activity_groups;
 mod app_server_event_targets;
@@ -1183,6 +1184,7 @@ impl App {
                         self.backtrack_render_pending = false;
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
+                    self.chat_widget.eslabon_publish_state();
                     if self
                         .chat_widget
                         .handle_paste_burst_tick(tui.frame_requester())

@@ -123,12 +123,25 @@ impl WidgetRef for &WelcomeWidget {
             0
         };
         let mut lines: Vec<Line> = vec![Line::default(); usize::from(logo_rows)];
-        lines.push(Line::from(vec![
-            "  ".into(),
-            "Welcome to ".into(),
-            "Codex".bold(),
-            ", OpenAI's command-line coding agent".into(),
-        ]));
+        if crate::eslabon_stream::branded() {
+            // eslabon: one-line welcome plus the brief attribution the plan asks for.
+            lines.push(Line::from(vec![
+                "  ".into(),
+                "Welcome to ".into(),
+                codex_config::eslabon::marca::NOMBRE_PRODUCTO.bold(),
+            ]));
+            lines.push(Line::from(vec![
+                "  ".into(),
+                codex_config::eslabon::marca::ATRIBUCION.into(),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                "  ".into(),
+                "Welcome to ".into(),
+                "Codex".bold(),
+                ", OpenAI's command-line coding agent".into(),
+            ]));
+        }
 
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -218,5 +231,59 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         insta::assert_snapshot!(format!("welcome_logo_{width}x{height}"), visible.trim_end());
+    }
+
+    fn render_welcome_text(branded: bool) -> String {
+        let _guard = branded.then(crate::eslabon_stream::force_for_test);
+        let (width, height) = (160, 48);
+        let widget = WelcomeWidget::new(
+            /*is_logged_in*/ false,
+            FrameRequester::test_dummy(),
+            /*animations_enabled*/ true,
+        );
+        let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
+        let mut buf = Buffer::empty(area);
+        (&widget).render_ref(area, &mut buf);
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn welcome_in_eslabon_mode_names_eslabon_and_the_attribution() {
+        let visible = render_welcome_text(/*branded*/ true);
+        assert!(visible.contains("Welcome to Eslabon"), "{visible}");
+        assert!(
+            visible.contains(codex_config::eslabon::marca::ATRIBUCION),
+            "{visible}"
+        );
+        assert!(!visible.contains("OpenAI's command-line coding agent"), "{visible}");
+        let codex_lines: Vec<&str> = visible
+            .lines()
+            .filter(|linea| linea.to_ascii_lowercase().contains("codex"))
+            .map(str::trim)
+            .collect();
+        assert_eq!(
+            codex_lines,
+            vec![codex_config::eslabon::marca::ATRIBUCION],
+            "{visible}"
+        );
+    }
+
+    #[test]
+    fn welcome_outside_eslabon_mode_keeps_upstream_copy() {
+        let visible = render_welcome_text(/*branded*/ false);
+        assert!(
+            visible.contains("Welcome to Codex, OpenAI's command-line coding agent"),
+            "{visible}"
+        );
+        assert!(!visible.contains("Welcome to Eslabon"), "{visible}");
     }
 }

@@ -51,6 +51,45 @@ use supports_color::Stream;
 #[global_allocator]
 static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+// eslabon: product and binary names for runtime messages. They read the live
+// mode so codex mode keeps upstream's exact copy.
+fn nombre_producto_mensaje() -> &'static str {
+    if codex_config::eslabon::modo_eslabon() {
+        codex_config::eslabon::marca::NOMBRE_PRODUCTO
+    } else {
+        "Codex"
+    }
+}
+
+fn nombre_binario_mensaje() -> &'static str {
+    if codex_config::eslabon::modo_eslabon() {
+        codex_config::eslabon::marca::NOMBRE_BINARIO
+    } else {
+        "codex"
+    }
+}
+
+/// eslabon: where `update` sends the user. Upstream installs come from its docs;
+/// Eslabon has its own releases (P5.7: it must never point at npm/brew/install.sh).
+#[cfg(any(windows, not(debug_assertions)))]
+fn url_de_actualizacion() -> &'static str {
+    if codex_config::eslabon::modo_eslabon() {
+        codex_config::eslabon::marca::URL_RELEASES
+    } else {
+        "https://developers.openai.com/codex/cli/"
+    }
+}
+
+/// eslabon: `update` cannot fetch a release by itself in Eslabon mode; it prints
+/// this (English, no OpenAI URLs) and stops without running anything.
+fn mensaje_de_actualizacion_eslabon() -> String {
+    format!(
+        "`{} update` does not install the upstream packages; download the latest Eslabon release from {} and replace the binary.",
+        codex_config::eslabon::marca::NOMBRE_BINARIO,
+        codex_config::eslabon::marca::URL_RELEASES
+    )
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod app_cmd;
 mod config_override_args;
@@ -59,6 +98,12 @@ mod daemon_telemetry;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
 mod doctor;
+mod eslabon_catalog_cmd;
+mod eslabon_cli_marca;
+mod eslabon_config_cmd;
+mod eslabon_init_cmd;
+mod eslabon_phi_cmd;
+mod eslabon_update_cmd;
 #[cfg(test)]
 #[path = "exec_args_tests.rs"]
 mod exec_args_tests;
@@ -181,8 +226,28 @@ enum Subcommand {
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
+    /// [eslabon] Build model catalogs from models.dev or a local server.
+    Catalog(eslabon_catalog_cmd::CatalogCommand),
+
+    /// [eslabon] Turn the data lock on or off.
+    #[command(visible_alias = "data-lock")]
+    Phi(eslabon_phi_cmd::PhiCommand),
+
+    /// [eslabon] Check a home's profiles, providers, catalogs and local servers.
+    Revisar(eslabon_config_cmd::RevisarCommand),
+
+    /// [eslabon] Create an unattended home (no MCP, hooks or plugins) from a profile.
+    Desatendido(eslabon_config_cmd::DesatendidoCommand),
+
+    /// [eslabon] Set up this home for a local OpenAI-compatible server.
+    Init(eslabon_init_cmd::InitCommand),
+
     /// Update Codex to the latest version.
-    Update,
+    Update {
+        /// Check the published releases without installing anything.
+        #[clap(long)]
+        check: bool,
+    },
 
     /// Diagnose local Codex installation, config, auth, and runtime health.
     Doctor(DoctorCommand),
@@ -796,8 +861,12 @@ fn run_update_action(
     cli_executable: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     if let UpdateAction::Daemon(source) = action {
-        let executable = cli_executable
-            .ok_or_else(|| anyhow::anyhow!("Cannot locate the launching Codex CLI"))?;
+        let executable = cli_executable.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Cannot locate the launching {} CLI",
+                nombre_producto_mensaje()
+            )
+        })?;
         println!("Updating the local background server...");
         let status = std::process::Command::new(executable)
             .args(source.command_args())
@@ -807,12 +876,12 @@ fn run_update_action(
             status.success(),
             "Daemon update failed with status {status}"
         );
-        println!("Relaunch Codex to reconnect.");
+        println!("Relaunch {} to reconnect.", nombre_producto_mensaje());
         return Ok(());
     }
     println!();
     let cmd_str = action.command_str();
-    println!("Updating Codex via `{cmd_str}`...");
+    println!("Updating {} via `{cmd_str}`...", nombre_producto_mensaje());
     let status = {
         #[cfg(windows)]
         {
@@ -856,7 +925,10 @@ fn run_update_action(
     if !status.success() {
         anyhow::bail!("`{cmd_str}` failed with status {status}");
     }
-    println!("\n🎉 Update ran successfully! Please restart Codex.");
+    println!(
+        "\n🎉 Update ran successfully! Please restart {}.",
+        nombre_producto_mensaje()
+    );
     Ok(())
 }
 
@@ -868,8 +940,9 @@ fn resolve_windows_update_command_from_path(
     let path_env =
         std::env::join_paths(std::env::split_paths(path_env).filter(|path| path.is_absolute()))?;
     if path_env.is_empty() {
+        let url = url_de_actualizacion();
         anyhow::bail!(
-            "Could not find an absolute update command `{command}` on PATH. Please update manually: https://developers.openai.com/codex/cli/"
+            "Could not find an absolute update command `{command}` on PATH. Please update manually: {url}"
         );
     }
     which::which_in_global(command, Some(&path_env))?
@@ -878,18 +951,27 @@ fn resolve_windows_update_command_from_path(
 }
 
 fn run_update_command() -> anyhow::Result<()> {
+    // eslabon: Eslabon ships its own releases; never run npm/brew/install.sh.
+    if codex_config::eslabon::modo_eslabon() {
+        anyhow::bail!(mensaje_de_actualizacion_eslabon());
+    }
+
     #[cfg(debug_assertions)]
     {
         anyhow::bail!(
-            "`codex update` is not available in debug builds. Install a release build of Codex to use this command."
+            "`{} update` is not available in debug builds. Install a release build of {} to use this command.",
+            nombre_binario_mensaje(),
+            nombre_producto_mensaje()
         );
     }
 
     #[cfg(not(debug_assertions))]
     {
         let Some(action) = codex_tui::get_update_action() else {
+            let url = url_de_actualizacion();
             anyhow::bail!(
-                "Could not detect the Codex installation method. Please update manually: https://developers.openai.com/codex/cli/"
+                "Could not detect the {} installation method. Please update manually: {url}",
+                nombre_producto_mensaje()
             );
         };
         run_update_action(action, /*cli_executable*/ None)
@@ -1036,6 +1118,45 @@ fn stage_str(stage: Stage) -> &'static str {
 
 fn main() -> anyhow::Result<()> {
     codex_build_info::initialize!();
+    // eslabon: in Eslabon mode its own home (~/.eslabon) so the official Codex keeps
+    // ~/.codex untouched. Some readers bypass `find_codex_home` (doctor, the app-server
+    // daemon, the macOS symlink helper) and read CODEX_HOME directly, so ESLABON_HOME
+    // is exported as CODEX_HOME too and every reader agrees on one home. Invoked as
+    // `codex` outside the mode, upstream home resolution applies unchanged.
+    if codex_config::eslabon::modo_eslabon() {
+        let eslabon_home = std::env::var_os(codex_config::eslabon::marca::VARIABLE_HOME)
+            .filter(|value| !value.is_empty());
+        if let Some(eslabon_home) = eslabon_home {
+            // SAFETY: still single-threaded; no runtime or helper thread has started yet.
+            unsafe {
+                std::env::set_var("CODEX_HOME", eslabon_home);
+            }
+        } else if std::env::var_os("CODEX_HOME").is_none_or(|value| value.is_empty())
+            && let Some(home) = std::env::var_os("HOME")
+        {
+            let eslabon_home =
+                std::path::Path::new(&home).join(codex_config::eslabon::marca::CARPETA_HOME);
+            // eslabon: 0700 so other accounts on a shared machine cannot read the
+            // config or the auth payload of this home.
+            let mut builder = std::fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            let _ = builder.create(&eslabon_home);
+            // SAFETY: still single-threaded; no runtime or helper thread has started yet.
+            unsafe {
+                std::env::set_var("CODEX_HOME", &eslabon_home);
+            }
+        }
+    }
+    // eslabon: only the eslabon binary (argv[0] or ESLABON_LAUNCHER=1) opts into
+    // its presentation; plain `codex` keeps upstream's look.
+    if codex_config::eslabon::modo_eslabon() {
+        codex_tui::enable_eslabon_defaults();
+    }
     let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
     arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
         // Finish polling the large subcommand dispatcher before polling interactive TUI events.
@@ -1056,8 +1177,14 @@ async fn dispatch_cli(
         remote,
         mut interactive,
         subcommand,
-    } = config_override_args::try_parse_from(std::env::args_os())
-        .unwrap_or_else(|error| error.exit());
+    } = if codex_config::eslabon::modo_eslabon() {
+        // eslabon: parse over the branded command so --help/--version and every
+        // subcommand help use Eslabon's copy.
+        eslabon_cli_marca::try_parse_from(std::env::args_os())
+    } else {
+        config_override_args::try_parse_from(std::env::args_os())
+    }
+    .unwrap_or_else(|error| error.exit());
     // Retain the launch target through TUI exit, even if a launcher changes selection.
     let daemon_cli_executable = arg0_paths
         .codex_self_exe
@@ -1667,7 +1794,8 @@ async fn dispatch_cli(
                         .await;
                     } else if login_cli.api_key.is_some() {
                         eprintln!(
-                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | {} login --with-api-key`.",
+                            nombre_binario_mensaje()
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {
@@ -1694,6 +1822,31 @@ async fn dispatch_cli(
             );
             run_logout(logout_cli.config_overrides).await;
         }
+        Some(Subcommand::Phi(phi_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "phi",
+            )?;
+            eslabon_phi_cmd::run(phi_cli).await?;
+        }
+        Some(Subcommand::Revisar(revisar_cli)) => {
+            eslabon_config_cmd::run_revisar(revisar_cli)?;
+        }
+        Some(Subcommand::Desatendido(desatendido_cli)) => {
+            eslabon_config_cmd::run_desatendido(desatendido_cli)?;
+        }
+        Some(Subcommand::Init(init_cli)) => {
+            eslabon_init_cmd::run(init_cli)?;
+        }
+        Some(Subcommand::Catalog(catalog_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "catalog",
+            )?;
+            eslabon_catalog_cmd::run(catalog_cli).await?;
+        }
         Some(Subcommand::Completion(completion_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1702,13 +1855,17 @@ async fn dispatch_cli(
             )?;
             print_completion(completion_cli);
         }
-        Some(Subcommand::Update) => {
+        Some(Subcommand::Update { check }) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),
                 "update",
             )?;
-            run_update_command()?;
+            if check {
+                eslabon_update_cmd::run_check().await?;
+            } else {
+                run_update_command()?;
+            }
         }
         Some(Subcommand::Doctor(doctor_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -2362,8 +2519,13 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::App(_)) => Some("app"),
         Some(Subcommand::Login(_)) => Some("login"),
         Some(Subcommand::Logout(_)) => Some("logout"),
+        Some(Subcommand::Catalog(_)) => Some("catalog"),
+        Some(Subcommand::Phi(_)) => Some("phi"),
+        Some(Subcommand::Revisar(_)) => Some("revisar"),
+        Some(Subcommand::Desatendido(_)) => Some("desatendido"),
+        Some(Subcommand::Init(_)) => Some("init"),
         Some(Subcommand::Completion(_)) => Some("completion"),
-        Some(Subcommand::Update) => Some("update"),
+        Some(Subcommand::Update { .. }) => Some("update"),
         Some(Subcommand::Cloud(_)) => Some("cloud"),
         Some(Subcommand::Sandbox(_)) => Some("sandbox"),
         Some(Subcommand::Debug(_)) => Some("debug"),
@@ -2483,6 +2645,12 @@ async fn run_interactive_tui(
     remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
 ) -> std::io::Result<AppExitInfo> {
+    // eslabon: the background app-server daemon needs an installed Codex package, which
+    // the `eslabon` command never has; it runs embedded unless a shared server is
+    // required. Invoked as `codex`, the upstream daemon behavior stays.
+    if codex_config::eslabon::modo_eslabon() && !interactive.agents_overview && remote.is_none() {
+        interactive.no_daemon = true;
+    }
     if interactive.no_daemon && remote.is_some() {
         return Ok(AppExitInfo::fatal(
             "--no-daemon cannot be used with --remote.",
@@ -2502,7 +2670,8 @@ async fn run_interactive_tui(
         }
 
         eprintln!(
-            "WARNING: TERM is set to \"dumb\". Codex's interactive TUI may not work in this terminal."
+            "WARNING: TERM is set to \"dumb\". {}'s interactive TUI may not work in this terminal.",
+            nombre_producto_mensaje()
         );
         if !confirm("Continue anyway? [y/N]: ")? {
             return Ok(AppExitInfo::fatal(
@@ -2583,7 +2752,8 @@ where
             Err(backup_err) => {
                 local_state_db::print_diagnostic_guidance(startup_error);
                 return Ok(AppExitInfo::fatal(format!(
-                    "failed to move damaged Codex local database files into a backup folder automatically: {backup_err}"
+                    "failed to move damaged {} local database files into a backup folder automatically: {backup_err}",
+                    nombre_producto_mensaje()
                 )));
             }
         }
@@ -2776,8 +2946,13 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
 }
 
 fn print_completion(cmd: CompletionCommand) {
-    let mut app = MultitoolCli::command();
-    let name = "codex";
+    // eslabon: shell completions carry the public name and copy in Eslabon mode.
+    let mut app = if codex_config::eslabon::modo_eslabon() {
+        eslabon_cli_marca::con_marca(MultitoolCli::command())
+    } else {
+        MultitoolCli::command()
+    };
+    let name = nombre_binario_mensaje();
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 
@@ -2800,6 +2975,18 @@ mod tests {
         let size = std::mem::size_of_val(&future);
 
         assert!(size < 64 * 1024, "interactive TUI future is {size} bytes");
+    }
+
+    #[test]
+    fn el_aviso_de_actualizacion_es_eslabon_y_no_menciona_openai() {
+        let mensaje = mensaje_de_actualizacion_eslabon();
+        assert!(mensaje.contains(codex_config::eslabon::marca::URL_RELEASES));
+        assert!(mensaje.contains("`eslabon update`"), "{mensaje}");
+        assert!(!mensaje.contains("openai.com"), "{mensaje}");
+        assert!(
+            !mensaje.contains("npm") && !mensaje.contains("brew"),
+            "{mensaje}"
+        );
     }
 
     #[cfg(windows)]
@@ -2843,7 +3030,8 @@ mod tests {
         assert_eq!(
             err.to_string(),
             format!(
-                "Could not find an absolute update command `{command}` on PATH. Please update manually: https://developers.openai.com/codex/cli/"
+                "Could not find an absolute update command `{command}` on PATH. Please update manually: {}",
+                url_de_actualizacion()
             )
         );
     }
@@ -3590,7 +3778,20 @@ enabled = true
     #[test]
     fn update_parses_as_update_subcommand() {
         let cli = MultitoolCli::try_parse_from(["codex", "update"]).expect("parse");
-        assert!(matches!(cli.subcommand, Some(Subcommand::Update)));
+        assert!(matches!(
+            cli.subcommand,
+            Some(Subcommand::Update { check: false })
+        ));
+    }
+
+    #[test]
+    fn update_check_parses_the_check_flag() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "update", "--check"]).expect("parse");
+        assert!(matches!(
+            cli.subcommand,
+            Some(Subcommand::Update { check: true })
+        ));
     }
 
     #[test]

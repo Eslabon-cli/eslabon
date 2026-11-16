@@ -94,3 +94,6 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
+
+# eslabon: release artifacts produced by scripts/eslabon/release/build.sh
+dist/

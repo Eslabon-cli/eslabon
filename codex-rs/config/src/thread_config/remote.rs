@@ -332,6 +332,8 @@ fn proto_string_map(values: HashMap<String, RedactedString>) -> proto::StringMap
 fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
     match wire_api {
         WireApi::Responses => proto::WireApi::Responses,
+        // eslabon: remote thread config only knows the Responses wire.
+        WireApi::Chat => panic!("remote thread config cannot carry the chat wire"),
     }
 }
 

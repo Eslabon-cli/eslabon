@@ -1134,6 +1134,12 @@
             "incremental_tools": {
               "type": "boolean"
             },
+            "incremental_tools_legacy": {
+              "type": "boolean"
+            },
+            "incremental_tools_legacy_gcp": {
+              "type": "boolean"
+            },
             "instant_interrupt": {
               "type": "boolean"
             },
@@ -1720,6 +1726,60 @@
         "external"
       ],
       "type": "string"
+    },
+    "EslabonDataPolicy": {
+      "description": "eslabon: what data a session may send to which providers.",
+      "oneOf": [
+        {
+          "description": "No restriction beyond Codex's own settings.",
+          "enum": [
+            "standard"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Protected health information: only local or BAA-covered providers.",
+          "enum": [
+            "phi"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "EslabonToml": {
+      "additionalProperties": false,
+      "properties": {
+        "anuncios": {
+          "description": "Whether the TUI fetches the upstream announcement tip from `raw.githubusercontent.com` at startup. `None` means the mode default: `false` in Eslabon mode, `true` outside it.",
+          "type": "boolean"
+        },
+        "data_policy": {
+          "$ref": "#/definitions/EslabonDataPolicy"
+        },
+        "desatendido": {
+          "description": "Marks an unattended home (benchmarks, batch runs): `eslabon revisar` then requires no MCP servers, hooks, plugins or ChatGPT connectors.",
+          "type": "boolean"
+        },
+        "notify_aprobacion": {
+          "description": "Command run (with a JSON argument) when a session starts waiting for an approval, e.g. `[\"terminal-notifier\", \"-message\"]`; see `$CODEX_HOME/estado/`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "permitir_openai": {
+          "description": "eslabon: allow outbound traffic to OpenAI hosts even in Eslabon mode, where the origin rule denies them. `None`/`false` keeps the rule on when the session has no OpenAI provider or login.",
+          "type": "boolean"
+        },
+        "phi_providers": {
+          "description": "Provider ids allowed under `phi`, e.g. a Vertex AI provider covered by a BAA or a local model whose host has been verified. Loopback URLs are not trusted implicitly.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
     },
     "ExperimentalRequestUserInput": {
       "additionalProperties": false,
@@ -7360,6 +7420,13 @@
             "responses"
           ],
           "type": "string"
+        },
+        {
+          "description": "eslabon: the Chat Completions API at `/v1/chat/completions`, spoken by most non-OpenAI providers and local servers (llama.cpp, vLLM, Novita, DeepSeek...).",
+          "enum": [
+            "chat"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -7503,6 +7570,15 @@
     "disable_paste_burst": {
       "description": "Legacy fallback for `tui.disable_paste_burst`. Prefer the setting under `[tui]`.",
       "type": "boolean"
+    },
+    "eslabon": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/EslabonToml"
+        }
+      ],
+      "default": null,
+      "description": "eslabon: data-egress policy. With `data_policy = \"phi\"` model requests may only reach providers listed in `phi_providers` (verified local hardware or under a BAA)."
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
@@ -7843,6 +7919,12 @@
           "type": "boolean"
         },
         "incremental_tools": {
+          "type": "boolean"
+        },
+        "incremental_tools_legacy": {
+          "type": "boolean"
+        },
+        "incremental_tools_legacy_gcp": {
           "type": "boolean"
         },
         "instant_interrupt": {

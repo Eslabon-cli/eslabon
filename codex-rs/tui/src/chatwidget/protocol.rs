@@ -43,6 +43,9 @@ impl ChatWidget {
         if !is_resume_initial_replay && !is_retry_error {
             self.restore_retry_status_header_if_present();
         }
+        if replay_kind.is_none() {
+            self.eslabon_observe_speed(&notification);
+        }
         match notification {
             ServerNotification::McpServerOauthLoginCompleted(notification) => {
                 if notification.success {

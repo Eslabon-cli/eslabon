@@ -263,6 +263,8 @@ mod connectors;
 mod constructor;
 mod dynamic_activity;
 mod empty_state_policy;
+mod eslabon_estado;
+mod eslabon_sidebar;
 pub(crate) use self::connectors::ConnectorScopeGeneration;
 use self::connectors::ConnectorsState;
 mod exec_state;
@@ -646,6 +648,20 @@ pub(crate) struct ChatWidget {
     mcp_startup_pending_next_round: HashMap<String, McpStartupStatus>,
     /// Tracks whether the buffered next round has seen any `Starting` update yet.
     mcp_startup_pending_next_round_saw_starting: bool,
+    /// eslabon: last known state of every MCP server, kept after startup settles.
+    eslabon_mcp_states: std::collections::BTreeMap<String, McpStartupStatus>,
+    /// eslabon: clickable sidebar rows from the last frame, and the MCP fold state.
+    eslabon_sidebar_hits: crate::eslabon_sidebar::SidebarHits,
+    eslabon_mcp_collapsed: bool,
+    eslabon_mcp_reload_in_flight: bool,
+    /// eslabon: client-side prompt/generation timing for the sidebar.
+    eslabon_speed: crate::eslabon_speed::SpeedMeter,
+    /// eslabon: approval prompt on screen (its one-line detail), and the session state
+    /// last written to `$CODEX_HOME/estado/`.
+    eslabon_approval_detail: Option<String>,
+    eslabon_published_state: Option<(eslabon_estado::EstadoSesion, Option<String>)>,
+    /// eslabon: last retry reason copied into the transcript (avoids repeating it per attempt).
+    eslabon_last_stream_error: Option<String>,
     connectors: ConnectorsState,
     ide_context: IdeContextState,
     plugins_cache: PluginsCacheState,
@@ -2115,7 +2131,6 @@ impl Drop for ChatWidget {
     }
 }
 
-const PLACEHOLDER: &str = "Ask Codex to do anything";
 const SIDE_PLACEHOLDER: &str = "Ask a follow-up question";
 
 // Extract the first bold (Markdown) element in the form **...** from `s`.

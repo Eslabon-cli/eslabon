@@ -162,6 +162,40 @@ pub struct FeatureToggleToml {
     pub enabled: Option<bool>,
 }
 
+/// eslabon: what data a session may send to which providers.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum EslabonDataPolicy {
+    /// No restriction beyond Codex's own settings.
+    #[default]
+    Standard,
+    /// Protected health information: only local or BAA-covered providers.
+    Phi,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct EslabonToml {
+    pub data_policy: Option<EslabonDataPolicy>,
+    /// Provider ids allowed under `phi`, e.g. a Vertex AI provider covered by a BAA or a
+    /// local model whose host has been verified. Loopback URLs are not trusted implicitly.
+    pub phi_providers: Option<Vec<String>>,
+    /// Marks an unattended home (benchmarks, batch runs): `eslabon revisar` then
+    /// requires no MCP servers, hooks, plugins or ChatGPT connectors.
+    pub desatendido: Option<bool>,
+    /// Command run (with a JSON argument) when a session starts waiting for an approval,
+    /// e.g. `["terminal-notifier", "-message"]`; see `$CODEX_HOME/estado/`.
+    pub notify_aprobacion: Option<Vec<String>>,
+    /// Whether the TUI fetches the upstream announcement tip from
+    /// `raw.githubusercontent.com` at startup. `None` means the mode default:
+    /// `false` in Eslabon mode, `true` outside it.
+    pub anuncios: Option<bool>,
+    /// eslabon: allow outbound traffic to OpenAI hosts even in Eslabon mode, where
+    /// the origin rule denies them. `None`/`false` keeps the rule on when the
+    /// session has no OpenAI provider or login.
+    pub permitir_openai: Option<bool>,
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -554,6 +588,11 @@ pub struct ConfigToml {
 
     /// OTEL configuration.
     pub otel: Option<OtelConfigToml>,
+
+    /// eslabon: data-egress policy. With `data_policy = "phi"` model requests may only
+    /// reach providers listed in `phi_providers` (verified local hardware or under a BAA).
+    #[serde(default)]
+    pub eslabon: Option<EslabonToml>,
 
     /// Windows-specific configuration.
     #[serde(default)]

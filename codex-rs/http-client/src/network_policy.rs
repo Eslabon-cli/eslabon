@@ -292,6 +292,10 @@ impl NetworkPolicy {
     /// Disables SDKs without destination enforcement whenever restrictions apply.
     /// The returned permit also cancels work if an unrestricted policy changes.
     pub fn acquire_for_unsupported_sdk(&self) -> Result<NetworkPermit, NetworkPolicyDenied> {
+        // eslabon: these SDKs cannot check destinations, so the PHI block disables them.
+        if crate::eslabon_policy::phi_policy_active() {
+            return Err(NetworkPolicyDenied::UnsupportedTransport);
+        }
         if self.endpoints.is_some() {
             return Err(NetworkPolicyDenied::UnsupportedTransport);
         }

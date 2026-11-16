@@ -1,0 +1,14 @@
+---
+source: tui/src/eslabon_sidebar.rs
+expression: "render_to_string(&snapshot, 10)"
+---
+│ qwen3.8-flash-next-coder
+│ local
+│
+│ Context
+│ waiting for first turn
+│
+│ MCP
+│ no servers configured
+│
+│ Data lock ● on · local/BAA only

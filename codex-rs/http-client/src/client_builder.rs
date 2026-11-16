@@ -403,9 +403,16 @@ impl HttpClientBuilder {
         }
         if !self.follow_redirects {
             builder = builder.redirect(reqwest::redirect::Policy::none());
-        } else if let Some(redirect_observed) = self.redirect_observed {
+        } else {
+            // eslabon: every redirect hop is checked against the PHI egress policy.
+            let redirect_observed = self.redirect_observed;
             builder = builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                redirect_observed.store(/*val*/ true, Ordering::Relaxed);
+                if let Some(redirect_observed) = &redirect_observed {
+                    redirect_observed.store(/*val*/ true, Ordering::Relaxed);
+                }
+                if crate::eslabon_policy::check(attempt.url().as_str()).is_err() {
+                    return attempt.error("redirect blocked by eslabon data policy");
+                }
                 reqwest::redirect::Policy::default().redirect(attempt)
             }));
         }

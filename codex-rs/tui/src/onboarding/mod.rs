@@ -1,5 +1,6 @@
 mod auth;
 mod bedrock;
+mod eslabon_local;
 mod gcp;
 pub(crate) use bedrock::check_gov_cloud;
 mod keys;

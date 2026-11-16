@@ -54,12 +54,29 @@ impl App {
     ) {
         self.app_event_tx
             .send(crate::app_event::AppEvent::FollowTranscript);
+        // eslabon: a model is saved together with its provider, never alone. If the session
+        // did not move to that model's provider, saving would pair the model with the wrong
+        // provider and every later session would fail with «error sending request».
+        let eslabon_provider = crate::eslabon_stream::provider_for_model(
+            self.config.codex_home.as_path(),
+            &model,
+        );
+        if eslabon_provider
+            .as_ref()
+            .is_some_and(|provider| *provider != self.chat_widget.config_ref().model_provider_id)
+        {
+            return;
+        }
+        let mut edits =
+            crate::config_update::build_model_selection_edits(model.as_str(), effort.as_ref());
+        if let Some(provider) = eslabon_provider {
+            edits.push(crate::config_update::replace_config_value(
+                "model_provider",
+                serde_json::json!(provider),
+            ));
+        }
         match self
-            .persist_model_defaults(
-                request_handle,
-                crate::config_update::build_model_selection_edits(model.as_str(), effort.as_ref()),
-                "default model and reasoning effort",
-            )
+            .persist_model_defaults(request_handle, edits, "default model and reasoning effort")
             .await
         {
             Ok(()) => {

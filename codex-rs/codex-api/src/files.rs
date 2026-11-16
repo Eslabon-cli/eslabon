@@ -149,6 +149,12 @@ where
     }
 
     let create_url = format!("{}/files", base_url.trim_end_matches('/'));
+    if let Some(message) = crate::eslabon_policy::egress_violation(&create_url) {
+        return Err(OpenAiFileError::UploadFailed {
+            file_id: file_name,
+            message,
+        });
+    }
     let create_request = serde_json::json!({
         "file_name": file_name.as_str(),
         "file_size": file_size_bytes,

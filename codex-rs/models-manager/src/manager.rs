@@ -1031,9 +1031,38 @@ fn construct_model_info(
     remote: Option<CatalogModel>,
     config: &ModelsManagerConfig,
 ) -> CatalogModel {
-    let mut resolved = remote.unwrap_or_else(|| CatalogModel {
-        model: model_info::model_info_from_slug(model).into(),
-        origin: ModelOrigin::Synthetic,
+    construct_model_info_con(
+        model,
+        remote,
+        config,
+        model_info::perfil_por_defecto_eslabon_activo(),
+    )
+}
+
+/// eslabon: the same resolution with the Eslabon profile as an explicit argument, so
+/// tests pin it without touching the process-wide switch.
+pub(crate) fn construct_model_info_con(
+    model: &str,
+    remote: Option<CatalogModel>,
+    config: &ModelsManagerConfig,
+    eslabon: bool,
+) -> CatalogModel {
+    let mut resolved = remote.unwrap_or_else(|| {
+        // eslabon: an unknown model in Eslabon mode gets the conservative chat
+        // profile, declared as bundled metadata (it ships with the binary) so the
+        // turn does not warn about missing metadata; outside the mode this is the
+        // upstream synthetic fallback plus its warning.
+        if eslabon {
+            CatalogModel {
+                model: model_info::model_info_desconocido_eslabon(model).into(),
+                origin: ModelOrigin::Bundled,
+            }
+        } else {
+            CatalogModel {
+                model: model_info::model_info_from_slug(model).into(),
+                origin: ModelOrigin::Synthetic,
+            }
+        }
     });
     let mut metadata = Arc::unwrap_or_clone(resolved.model);
     metadata.slug = model.to_owned();

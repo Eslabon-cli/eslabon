@@ -7,6 +7,7 @@
 //! compact history hides their full text behind the persistent warning notice.
 
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 
 use codex_app_server_protocol::McpServerStartupFailureReason;
 use codex_app_server_protocol::McpServerStartupState;
@@ -44,6 +45,8 @@ impl ChatWidget {
         status: McpStartupStatus,
         complete_when_settled: bool,
     ) {
+        self.eslabon_mcp_states
+            .insert(server.clone(), status.clone());
         let mut activated_pending_round = false;
         let startup_status = if self.mcp_startup_ignore_updates_until_next_start {
             // Ignore-mode buffers the next plausible round so stale post-finish
@@ -196,7 +199,15 @@ impl ChatWidget {
     where
         I: IntoIterator<Item = String>,
     {
-        self.mcp_startup_expected_servers = Some(server_names.into_iter().collect());
+        let expected: HashSet<String> = server_names.into_iter().collect();
+        // eslabon: forget servers that left the configuration (removed or renamed);
+        // built-in servers never appear in this set and are kept.
+        if let Some(previous) = &self.mcp_startup_expected_servers {
+            for removed in previous.difference(&expected) {
+                self.eslabon_mcp_states.remove(removed);
+            }
+        }
+        self.mcp_startup_expected_servers = Some(expected);
     }
 
     pub(super) fn finish_mcp_startup(&mut self, failed: Vec<String>, cancelled: Vec<String>) {

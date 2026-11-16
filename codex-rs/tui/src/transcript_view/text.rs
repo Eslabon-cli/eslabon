@@ -57,6 +57,8 @@ struct DisclosureControl {
     label: String,
     source_offset: usize,
     row: usize,
+    /// eslabon: the control is the activity's own first row; no row was inserted.
+    inline: bool,
 }
 
 struct TextRow {
@@ -160,8 +162,11 @@ impl TextLayout {
     pub(super) fn rewrap(&self, width: u16) -> Self {
         let mut layout = Self::from_logical(self.logical.clone(), width);
         if let Some(control) = &self.disclosure_control {
-            layout =
-                layout.with_disclosure_control_at(control.label.clone(), control.source_offset);
+            layout = if control.inline {
+                layout.with_inline_disclosure_control()
+            } else {
+                layout.with_disclosure_control_at(control.label.clone(), control.source_offset)
+            };
         }
         layout.image = self.image.clone();
         if self.leading_blank_hidden {
@@ -189,7 +194,9 @@ impl TextLayout {
         if self.text.is_empty() || label.is_empty() {
             return self;
         }
-        if let Some(control) = self.disclosure_control.take() {
+        if let Some(control) = self.disclosure_control.take()
+            && !control.inline
+        {
             self.rows.remove(control.row);
         }
         let source_offset = self
@@ -222,6 +229,28 @@ impl TextLayout {
             label,
             source_offset,
             row: control_row,
+            inline: false,
+        });
+        self
+    }
+
+    /// eslabon: make the first row itself the disclosure control (opencode-style
+    /// clickable rows) instead of appending a "+ Show details" row.
+    pub(super) fn with_inline_disclosure_control(mut self) -> Self {
+        if self.rows.is_empty() {
+            return self;
+        }
+        if let Some(control) = self.disclosure_control.take()
+            && !control.inline
+        {
+            self.rows.remove(control.row);
+        }
+        self.disclosure = true;
+        self.disclosure_control = Some(DisclosureControl {
+            label: String::new(),
+            source_offset: 0,
+            row: 0,
+            inline: true,
         });
         self
     }

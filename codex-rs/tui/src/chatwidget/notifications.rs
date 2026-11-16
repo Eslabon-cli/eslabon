@@ -4,6 +4,14 @@ use super::*;
 
 impl ChatWidget {
     pub(super) fn notify(&mut self, notification: Notification) {
+        if matches!(
+            notification,
+            Notification::ExecApprovalRequested { .. }
+                | Notification::EditApprovalRequested { .. }
+                | Notification::ElicitationRequested { .. }
+        ) {
+            self.eslabon_mark_approval(notification.display());
+        }
         if !notification.allowed_for(&self.local_settings.tui.notification_settings.notifications) {
             return;
         }
