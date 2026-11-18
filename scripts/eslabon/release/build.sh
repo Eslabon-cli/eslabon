@@ -210,6 +210,16 @@ trap limpiar EXIT INT TERM
 if [ -z "$TRIPLE" ] && command -v strip >/dev/null 2>&1; then
   strip "$BINARIO"
 fi
+if [ -n "$TRIPLE" ] && command -v rustc >/dev/null 2>&1; then
+  # eslabon: macOS `strip` corrompe binarios ELF/PE; para los targets
+  # cruzados se usa el llvm-strip del toolchain de Rust.
+  sysroot="$(rustc --print sysroot)"
+  host="$(rustc -Vv | sed -n 's/^host: //p')"
+  llvm_strip="$sysroot/lib/rustlib/$host/bin/llvm-strip"
+  if [ -x "$llvm_strip" ]; then
+    "$llvm_strip" "$BINARIO"
+  fi
+fi
 
 if [ -n "${ESLABON_APPLE_IDENTITY:-}" ]; then
   case "$OBJETIVO" in

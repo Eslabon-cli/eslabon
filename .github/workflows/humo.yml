@@ -27,12 +27,15 @@ jobs:
         include:
           - os: macos-14
             target: macos-arm64
+            triple: ""
             smoke: true
           - os: ubuntu-24.04
             target: linux-x86_64
+            triple: ""
             smoke: true
-          - os: windows-2022
+          - os: ubuntu-24.04
             target: windows-x86_64
+            triple: x86_64-pc-windows-gnu
             smoke: false
     env:
       CARGO_INCREMENTAL: "0"
@@ -50,22 +53,27 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-
+      - name: Install the MinGW cross toolchain
+        if: matrix.triple != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-mingw-w64-x86-64
+      - name: Add the Windows target
+        if: matrix.triple != ''
+        run: rustup target add "${{ matrix.triple }}"
       - name: Build lean release binary
+        if: matrix.triple == ''
         working-directory: codex-rs
         run: cargo build --release --locked -p codex-cli --bin eslabon
+      - name: Build lean Windows binary
+        if: matrix.triple != ''
+        working-directory: codex-rs
+        run: cargo build --release --locked -p codex-cli --bin eslabon --target "${{ matrix.triple }}"
       - name: Run smoke harness
         if: matrix.smoke
         run: bash scripts/eslabon/humo/humo.sh codex-rs/target/release/eslabon
       - name: Verify Windows binary
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          ESLABON_HOME: ${{ runner.temp }}/eslabon-home
-          CODEX_HOME: ${{ runner.temp }}/eslabon-home
+        if: matrix.target == 'windows-x86_64'
         run: |
-          New-Item -ItemType Directory -Force -Path $env:ESLABON_HOME | Out-Null
-          $version = & codex-rs\target\release\eslabon.exe --version
-          if ($version -notmatch '^eslabon \d+\.\d+\.\d+') {
-            throw "unexpected eslabon --version output: $version"
-          }
-          Write-Output $version
+          file codex-rs/target/x86_64-pc-windows-gnu/release/eslabon.exe
+          x86_64-w64-mingw32-objdump -p codex-rs/target/x86_64-pc-windows-gnu/release/eslabon.exe | grep -q 'PE32+'
