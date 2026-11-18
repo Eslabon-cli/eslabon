@@ -1,5 +1,7 @@
 name: humo
 
+# macOS is validated on the Mac mini; GitHub-hosted macOS runners are not
+# available for this private repository on its current plan.
 on:
   workflow_dispatch:
   pull_request:
@@ -25,10 +27,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            target: macos-arm64
-            triple: ""
-            smoke: true
           - os: ubuntu-24.04
             target: linux-x86_64
             triple: ""
