@@ -58,6 +58,7 @@ jobs:
           sudo apt-get install -y g++-mingw-w64-x86-64
       - name: Add the Windows target
         if: matrix.triple != ''
+        working-directory: codex-rs
         run: rustup target add "${{ matrix.triple }}"
       - name: Build lean release binary
         if: matrix.triple == ''
