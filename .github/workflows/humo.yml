@@ -37,7 +37,7 @@ jobs:
             smoke: false
     env:
       CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
       RUST_MIN_STACK: "8388608"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -63,16 +63,16 @@ jobs:
       - name: Build lean release binary
         if: matrix.triple == ''
         working-directory: codex-rs
-        run: cargo build --release --locked -p codex-cli --bin eslabon
+        run: cargo build --locked -p codex-cli --bin eslabon
       - name: Build lean Windows binary
         if: matrix.triple != ''
         working-directory: codex-rs
-        run: cargo build --release --locked -p codex-cli --bin eslabon --target "${{ matrix.triple }}"
+        run: cargo build --locked -p codex-cli --bin eslabon --target "${{ matrix.triple }}"
       - name: Run smoke harness
         if: matrix.smoke
-        run: bash scripts/eslabon/humo/humo.sh codex-rs/target/release/eslabon
+        run: bash scripts/eslabon/humo/humo.sh codex-rs/target/debug/eslabon
       - name: Verify Windows binary
         if: matrix.target == 'windows-x86_64'
         run: |
-          file codex-rs/target/x86_64-pc-windows-gnu/release/eslabon.exe
-          x86_64-w64-mingw32-objdump -p codex-rs/target/x86_64-pc-windows-gnu/release/eslabon.exe | grep -q 'PE32+'
+          file codex-rs/target/x86_64-pc-windows-gnu/debug/eslabon.exe
+          x86_64-w64-mingw32-objdump -p codex-rs/target/x86_64-pc-windows-gnu/debug/eslabon.exe | grep -q 'PE32+'
