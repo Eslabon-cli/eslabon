@@ -399,6 +399,7 @@ async fn finish(tx: &Tx, state: ChatStreamState, tool_map: &ChatToolMap) {
             token_usage,
             usage_metadata: None,
             end_turn,
+            reasoning_removals: None,
         }))
         .await;
 }

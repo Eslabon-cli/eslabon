@@ -2,10 +2,11 @@
 # eslabon: public installer for the prebuilt `eslabon` releases (P7.2).
 #
 #   curl -fsSL https://github.com/Eslabon-cli/eslabon/raw/main/scripts/eslabon/install-release.sh | sh
-#   ESLABON_VERSION=0.167.2 sh scripts/eslabon/install-release.sh
+#   ESLABON_VERSION=0.170.0 sh scripts/eslabon/install-release.sh
 #
-# Downloads the release tarball for this machine, verifies its SHA-256 against
-# the published `.sha256` file and only then installs `eslabon` into
+# Downloads the release archive for this machine (tar.gz on macOS/Linux, zip
+# on Windows), verifies its SHA-256 against the published `.sha256` file and
+# only then installs `eslabon` into
 # ${ESLABON_INSTALL_DIR:-$HOME/.local/bin}. No sudo, no shell files touched.
 #
 #   ESLABON_VERSION     release to install; default is the latest one
@@ -20,6 +21,7 @@ API_POR_DEFECTO="https://api.github.com/repos/Eslabon-cli/eslabon/releases/lates
 BASE_URL="${ESLABON_BASE_URL:-$BASE_POR_DEFECTO}"
 VERSION="${ESLABON_VERSION:-}"
 DESTINO="${ESLABON_INSTALL_DIR:-$HOME/.local/bin}"
+PLATAFORMA_WINDOWS=0
 
 fallar() {
   echo "error: $*" >&2
@@ -41,10 +43,22 @@ case "$(uname -s)" in
       *) fallar "unsupported architecture: $(uname -m)" ;;
     esac
     ;;
+  MINGW*|MSYS*|CYGWIN*)
+    OBJETIVO="windows-x86_64"
+    PLATAFORMA_WINDOWS=1
+    ;;
   *)
     fallar "unsupported system: $(uname -s)"
     ;;
 esac
+
+if [ "$PLATAFORMA_WINDOWS" -eq 1 ]; then
+  EXTENSION="zip"
+  BINARIO="eslabon.exe"
+else
+  EXTENSION="tar.gz"
+  BINARIO="eslabon"
+fi
 
 hash_de_archivo() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -57,7 +71,9 @@ hash_de_archivo() {
 }
 
 command -v curl >/dev/null 2>&1 || fallar "curl is required"
-command -v tar >/dev/null 2>&1 || fallar "tar is required"
+if [ "$PLATAFORMA_WINDOWS" -eq 0 ]; then
+  command -v tar >/dev/null 2>&1 || fallar "tar is required"
+fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/eslabon-install.XXXXXX")" ||
   fallar "could not create a temporary directory"
@@ -84,11 +100,11 @@ if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
 fi
 
 if [ "$VERSION" = "latest" ]; then
-  NOMBRE="eslabon-latest-$OBJETIVO.tar.gz"
+  NOMBRE="eslabon-latest-$OBJETIVO.$EXTENSION"
   URL="$BASE_URL/latest/download/$NOMBRE"
 else
   VERSION="${VERSION#v}"
-  NOMBRE="eslabon-$VERSION-$OBJETIVO.tar.gz"
+  NOMBRE="eslabon-$VERSION-$OBJETIVO.$EXTENSION"
   URL="$BASE_URL/download/v$VERSION/$NOMBRE"
 fi
 
@@ -107,29 +123,40 @@ fi
 
 DIR_BIN="$TMP/bin"
 mkdir -p "$DIR_BIN"
-tar -xzf "$TMP/$NOMBRE" -C "$DIR_BIN" eslabon ||
-  fallar "could not extract $NOMBRE"
-[ -x "$DIR_BIN/eslabon" ] || fallar "$NOMBRE does not contain an executable eslabon"
+if [ "$PLATAFORMA_WINDOWS" -eq 0 ]; then
+  tar -xzf "$TMP/$NOMBRE" -C "$DIR_BIN" eslabon ||
+    fallar "could not extract $NOMBRE"
+elif command -v unzip >/dev/null 2>&1; then
+  unzip -q "$TMP/$NOMBRE" "$BINARIO" -d "$DIR_BIN" ||
+    fallar "could not extract $NOMBRE"
+elif command -v powershell.exe >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+  powershell.exe -NoProfile -Command \
+    "Expand-Archive -LiteralPath '$(cygpath -w "$TMP/$NOMBRE")' -DestinationPath '$(cygpath -w "$DIR_BIN")' -Force" ||
+    fallar "could not extract $NOMBRE"
+else
+  fallar "need unzip or PowerShell to extract $NOMBRE"
+fi
+[ -x "$DIR_BIN/$BINARIO" ] || fallar "$NOMBRE does not contain an executable $BINARIO"
 
 # eslabon: reuse the checksummed binary only after it proves it runs.
 ESLABON_HOME="$TMP/home" CODEX_HOME="$TMP/home" \
-  "$DIR_BIN/eslabon" --version </dev/null >"$TMP/version.txt" ||
+  "$DIR_BIN/$BINARIO" --version </dev/null >"$TMP/version.txt" ||
   fallar "the downloaded eslabon binary does not run"
 head -n 1 "$TMP/version.txt"
 
 mkdir -p "$DESTINO"
-cp "$DIR_BIN/eslabon" "$DESTINO/eslabon.nuevo"
-chmod +x "$DESTINO/eslabon.nuevo"
-mv -f "$DESTINO/eslabon.nuevo" "$DESTINO/eslabon"
+cp "$DIR_BIN/$BINARIO" "$DESTINO/$BINARIO.nuevo"
+chmod +x "$DESTINO/$BINARIO.nuevo"
+mv -f "$DESTINO/$BINARIO.nuevo" "$DESTINO/$BINARIO"
 
 case ":$PATH:" in
   *":$DESTINO:"*) ;;
   *)
-    echo "warning: $DESTINO is not in PATH; add it to your shell profile to run eslabon"
+    echo "warning: $DESTINO is not in PATH; add it to your shell profile to run eslabon" >&2
     ;;
 esac
 
-echo "installed: $DESTINO/eslabon"
+echo "installed: $DESTINO/$BINARIO"
 ESLABON_HOME="$TMP/home" CODEX_HOME="$TMP/home" \
-  "$DESTINO/eslabon" --version </dev/null | head -n 1
+  "$DESTINO/$BINARIO" --version </dev/null | head -n 1
 echo 'Next: run `eslabon init`.'

@@ -55,6 +55,8 @@ use crate::motion::shimmer_text;
 use crate::onboarding::bedrock::BedrockState;
 use crate::onboarding::eslabon_local::EslabonLocalSetup;
 use crate::onboarding::eslabon_local::LocalSetupState;
+use crate::onboarding::gateway::GatewayStep;
+use crate::onboarding::gateway::USE_CUSTOM_PROVIDER;
 use crate::onboarding::gcp::GcpState;
 use crate::onboarding::keys;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
@@ -78,6 +80,7 @@ pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
 use super::onboarding_screen::StepState;
 
 mod headless_chatgpt_login;
+pub(super) use headless_chatgpt_login::render_device_code_prompt;
 
 #[derive(Clone)]
 pub(crate) enum SignInState {
@@ -95,6 +98,16 @@ pub(crate) enum SignInState {
     GcpConfigured,
     LocalSetup(LocalSetupState),
     LocalConfigured,
+    GatewaySelected(String),
+    GatewayOAuth {
+        provider_id: String,
+        url: Option<String>,
+    },
+    GatewayOAuthFailed {
+        provider_id: String,
+        message: String,
+    },
+    GatewayConfigured,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +119,7 @@ pub(crate) enum SignInOption {
     Bedrock,
     Gcp,
     LocalServer,
+    Gateway,
 }
 
 impl SignInOption {
@@ -210,7 +224,10 @@ impl KeyboardHandler for AuthModeWidget {
         if self.handle_local_setup_key_event(&key_event) {
             return;
         }
-        if self.handle_gcp_key_event(&key_event) || self.handle_bedrock_key_event(&key_event) {
+        if self.handle_gcp_key_event(&key_event)
+            || self.handle_bedrock_key_event(&key_event)
+            || self.handle_gateway_key_event(key_event)
+        {
             return;
         }
         if self.handle_api_key_entry_key_event(&key_event) {
@@ -240,9 +257,16 @@ impl KeyboardHandler for AuthModeWidget {
             self.select_option_by_index(/*index*/ 2, key_event);
             return;
         }
+        if keys::SELECT_FOURTH.is_pressed(key_event) {
+            self.select_option_by_index(/*index*/ 3, key_event);
+            return;
+        }
         if keys::CONFIRM.is_pressed(key_event) {
             let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
             match sign_in_state {
+                SignInState::GatewayOAuthFailed { provider_id, .. } => {
+                    self.start_gateway_oauth(provider_id)
+                }
                 SignInState::PickMode => {
                     self.activate_highlighted_mode(key_event);
                 }
@@ -277,6 +301,13 @@ impl KeyboardHandler for AuthModeWidget {
     }
 
     fn handle_paste(&mut self, pasted: String) {
+        if let Some(wizard) = &mut self.gateway {
+            if let Some(input) = wizard.active_input_mut() {
+                input.paste(&pasted);
+                self.request_frame.schedule_frame();
+            }
+            return;
+        }
         if self.handle_local_setup_paste(&pasted) {
             return;
         }
@@ -300,7 +331,6 @@ impl KeyboardHandler for AuthModeWidget {
     }
 }
 
-#[derive(Clone)]
 #[allow(dead_code)]
 pub(crate) struct AuthModeWidget {
     pub request_frame: FrameRequester,
@@ -318,6 +348,8 @@ pub(crate) struct AuthModeWidget {
     pub(super) eslabon_local: Option<EslabonLocalSetup>,
     /// eslabon: set when Esc in the picker must end onboarding with a hint.
     pub(super) exit_message: Option<String>,
+    pub gateway_setup_enabled: bool,
+    pub(super) gateway: Option<GatewayStep>,
     pub animations_enabled: bool,
     pub animations_suppressed: Cell<bool>,
 }
@@ -371,6 +403,9 @@ impl AuthModeWidget {
 
     /// Returns whether the auth flow is currently accepting text input.
     pub(crate) fn is_text_entry_active(&self) -> bool {
+        if let Some(wizard) = &self.gateway {
+            return wizard.is_text_entry_active();
+        }
         self.sign_in_state.read().is_ok_and(|guard| match &*guard {
             SignInState::ApiKeyEntry(_) => true,
             SignInState::Bedrock(state) => state.is_text_entry_active(),
@@ -385,6 +420,9 @@ impl AuthModeWidget {
     /// OpenAI API-key entry keeps its existing empty-field quit behavior, while
     /// Cloud setup fields accept printable input from their first character.
     pub(crate) fn should_suppress_printable_quit(&self) -> bool {
+        if let Some(wizard) = &self.gateway {
+            return wizard.is_text_entry_active();
+        }
         self.sign_in_state.read().is_ok_and(|guard| match &*guard {
             SignInState::ApiKeyEntry(state) => !state.value.is_empty(),
             SignInState::Bedrock(state) => state.is_text_entry_active(),
@@ -420,6 +458,9 @@ impl AuthModeWidget {
             }
             if self.gcp_setup_enabled {
                 options.push(SignInOption::Gcp);
+            }
+            if self.gateway_setup_enabled {
+                options.push(SignInOption::Gateway);
             }
             return options;
         }
@@ -476,14 +517,18 @@ impl AuthModeWidget {
     fn activate_highlighted_mode(&mut self, key_event: KeyEvent) {
         let option = self.highlighted_mode;
         if option == SignInOption::OtherMethods || option.is_alternative() {
-            // Enter and printable shortcuts can repeat as plain presses without a release.
-            self.activation_key_guard = Some(ActivationKeyGuard::new_at(
-                KeyBinding::from_event(key_event),
-                Instant::now(),
-                /*key_releases_reported*/ false,
-            ));
+            self.guard_activation(key_event);
         }
         self.handle_sign_in_option(option);
+    }
+
+    pub(super) fn guard_activation(&mut self, key_event: KeyEvent) {
+        // Enter and printable shortcuts can repeat as plain presses without a release.
+        self.activation_key_guard = Some(ActivationKeyGuard::new_at(
+            KeyBinding::from_event(key_event),
+            Instant::now(),
+            /*reported_repeats_only*/ false,
+        ));
     }
 
     fn handle_sign_in_option(&mut self, option: SignInOption) {
@@ -530,6 +575,13 @@ impl AuthModeWidget {
                     self.start_local_setup();
                 }
             }
+            SignInOption::Gateway => {
+                if self.gateway_setup_enabled && self.is_api_login_allowed() {
+                    self.start_gateway_picker();
+                } else if !self.is_api_login_allowed() {
+                    self.disallow_api_login();
+                }
+            }
         }
     }
 
@@ -551,7 +603,8 @@ impl AuthModeWidget {
                 ]),
                 "".into(),
             ]
-        } else if self.bedrock_setup_enabled || self.gcp_setup_enabled {
+        } else if self.bedrock_setup_enabled || self.gcp_setup_enabled || self.gateway_setup_enabled
+        {
             vec!["  Choose how you want to use Codex.".into(), "".into()]
         } else {
             vec![
@@ -613,7 +666,10 @@ impl AuthModeWidget {
                         idx,
                         option,
                         "Sign in another way",
-                        if self.bedrock_setup_enabled || self.gcp_setup_enabled {
+                        if self.bedrock_setup_enabled
+                            || self.gcp_setup_enabled
+                            || self.gateway_setup_enabled
+                        {
                             "Use an API key or another provider"
                         } else {
                             "Use an OpenAI API key"
@@ -678,6 +734,14 @@ impl AuthModeWidget {
                         option,
                         "Use a local server",
                         &descripcion,
+                    ));
+                }
+                SignInOption::Gateway => {
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        USE_CUSTOM_PROVIDER,
+                        "Choose a saved configuration or create a new one",
                     ));
                 }
             }
@@ -1021,7 +1085,7 @@ impl AuthModeWidget {
         true
     }
 
-    fn start_api_key_entry(&mut self) {
+    pub(super) fn start_api_key_entry(&mut self) {
         if !self.is_api_login_allowed() {
             self.disallow_api_login();
             return;
@@ -1111,7 +1175,7 @@ impl AuthModeWidget {
     }
 
     /// Kicks off the ChatGPT auth flow and keeps the UI state consistent with the attempt.
-    fn start_chatgpt_login(&mut self) {
+    pub(super) fn start_chatgpt_login(&mut self) {
         // If we're already authenticated with ChatGPT, don't start a new login –
         // just proceed to the success message flow.
         if self.handle_existing_chatgpt_login() {
@@ -1230,18 +1294,26 @@ impl StepStateProvider for AuthModeWidget {
             | SignInState::ChatGptSuccessMessage
             | SignInState::Bedrock(_)
             | SignInState::Gcp(_)
-            | SignInState::LocalSetup(_) => StepState::InProgress,
+            | SignInState::LocalSetup(_)
+            | SignInState::GatewayOAuth { .. }
+            | SignInState::GatewayOAuthFailed { .. } => StepState::InProgress,
             SignInState::ChatGptSuccess
             | SignInState::ApiKeyConfigured
             | SignInState::BedrockConfigured
             | SignInState::GcpConfigured
-            | SignInState::LocalConfigured => StepState::Complete,
+            | SignInState::LocalConfigured
+            | SignInState::GatewaySelected(_)
+            | SignInState::GatewayConfigured => StepState::Complete,
         }
     }
 }
 
 impl WidgetRef for AuthModeWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(wizard) = &self.gateway {
+            wizard.render(area, buf);
+            return;
+        }
         let sign_in_state = self.sign_in_state.read().unwrap();
         match &*sign_in_state {
             SignInState::PickMode => {
@@ -1270,6 +1342,37 @@ impl WidgetRef for AuthModeWidget {
             }
             SignInState::Gcp(state) => {
                 state.render(area, buf, self.error_message());
+            }
+            SignInState::GatewayOAuth { url, .. } => {
+                let title = if url.is_some() {
+                    "Finish signing in to your gateway in the browser."
+                } else {
+                    "Starting gateway sign-in…"
+                };
+                let mut lines = vec![Line::from(title.bold())];
+                if let Some(url) = url {
+                    lines.push(Line::from(url.clone().cyan().underlined()));
+                }
+                lines.push(Line::from("Press Ctrl+C to quit.".dim()));
+                Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .render(area, buf);
+                if let Some(url) = url {
+                    mark_url_hyperlink(buf, area, url);
+                }
+            }
+            SignInState::GatewayOAuthFailed { message, .. } => {
+                Paragraph::new(vec![
+                    Line::from(message.clone().red()),
+                    Line::from("Press Enter to retry or Ctrl+C to quit.".dim()),
+                ])
+                .wrap(Wrap { trim: false })
+                .render(area, buf);
+            }
+            SignInState::GatewaySelected(_) | SignInState::GatewayConfigured => {
+                Paragraph::new("✓ Custom provider configured".green())
+                    .wrap(Wrap { trim: false })
+                    .render(area, buf);
             }
             SignInState::GcpConfigured => {
                 Paragraph::new("✓ Google Cloud Vertex AI configured".green())
@@ -1322,7 +1425,8 @@ mod tests {
     use codex_app_server_client::InProcessClientStartArgs;
     use codex_app_server_client::RemoteAppServerEndpoint;
     use codex_arg0::Arg0DispatchPaths;
-    use codex_cloud_config::chatgpt_config_bundle_loader_for_storage;
+    use codex_config::CloudConfigBundleLoader;
+    use codex_config::LoaderOverrides;
     use codex_features::Feature;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -1419,7 +1523,14 @@ mod tests {
     pub(super) async fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
         let codex_home = TempDir::new().unwrap();
         let codex_home_path = codex_home.path().to_path_buf();
+        // Embedded startup can refresh cloud config using the host's workload identity.
+        let loader_overrides = LoaderOverrides {
+            ignore_managed_requirements: true,
+            managed_config_path: Some(codex_home_path.join("managed_config.toml")),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        };
         let config = ConfigBuilder::default()
+            .loader_overrides(loader_overrides.clone())
             .codex_home(codex_home_path.clone())
             .build()
             .await
@@ -1430,14 +1541,9 @@ mod tests {
             arg0_paths: Arg0DispatchPaths::default(),
             config: Arc::new(config),
             cli_overrides: Vec::new(),
-            loader_overrides: Default::default(),
+            loader_overrides,
             strict_config: false,
-            cloud_config_bundle: chatgpt_config_bundle_loader_for_storage(
-                auth_config.clone(),
-                /*enable_codex_api_key_env*/ false,
-            )
-            .await
-            .expect("test cloud config loader"),
+            cloud_config_bundle: CloudConfigBundleLoader::default(),
             embedded_network_policy: Default::default(),
             feedback: codex_feedback::CodexFeedback::new(),
             log_db: None,
@@ -1473,6 +1579,8 @@ mod tests {
             gcp_setup_enabled: false,
             eslabon_local: None,
             exit_message: None,
+            gateway_setup_enabled: false,
+            gateway: None,
             animations_enabled: true,
             animations_suppressed: std::cell::Cell::new(false),
         };
@@ -1901,3 +2009,7 @@ mod gcp_tests;
 
 #[path = "eslabon_local_tests.rs"]
 mod eslabon_local_tests;
+
+#[cfg(test)]
+#[path = "gateway_tests.rs"]
+mod gateway_tests;

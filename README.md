@@ -17,8 +17,8 @@ configured provider is not one of OpenAI's (unless a stored OpenAI login or
 ## Install
 
 Releases are published on [GitHub Releases](https://github.com/Eslabon-cli/eslabon/releases) for
-macOS (Apple Silicon and Intel) and Linux (x86_64 and arm64). The install script downloads the
-tarball for your machine, verifies its SHA-256 checksum and puts `eslabon` in
+macOS (Apple Silicon and Intel), Linux (x86_64 and arm64) and Windows (x86_64). The install script
+downloads the archive for your machine, verifies its SHA-256 checksum and puts `eslabon` in
 `${ESLABON_INSTALL_DIR:-$HOME/.local/bin}`. It uses no `sudo` and does not modify your shell
 profile. Read the script before you run it:
 
@@ -28,15 +28,26 @@ less eslabon-install.sh
 sh eslabon-install.sh
 ```
 
-The same in one line, pin the release with `ESLABON_VERSION=0.167.2`, and install somewhere else
+The same in one line, pin the release with `ESLABON_VERSION=0.170.0`, and install somewhere else
 with `ESLABON_INSTALL_DIR`:
 
 ```shell
 curl -fsSL https://github.com/Eslabon-cli/eslabon/raw/main/scripts/eslabon/install-release.sh | sh
-ESLABON_VERSION=0.167.2 ESLABON_INSTALL_DIR=/usr/local/bin sh eslabon-install.sh
+ESLABON_VERSION=0.170.0 ESLABON_INSTALL_DIR=/usr/local/bin sh eslabon-install.sh
 ```
 
 If the script warns that the directory is not in `PATH`, add it and then run `eslabon init`.
+
+On Windows, run the installer from Git Bash (or MSYS2), which provides the `sh` and `curl` the
+script needs:
+
+```shell
+ESLABON_VERSION=0.170.0 sh eslabon-install.sh
+```
+
+The script unpacks the `windows-x86_64.zip` release and installs `eslabon.exe`. Without Git Bash,
+download the `.zip` from the releases page, verify it against the `.sha256` file and extract
+`eslabon.exe` anywhere on your `PATH`.
 
 ### Homebrew
 

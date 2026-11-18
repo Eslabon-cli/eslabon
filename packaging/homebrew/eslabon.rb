@@ -6,7 +6,7 @@
 #   1. run scripts/eslabon/release/build.sh on each platform and collect the
 #      tar.gz + .sha256 pairs from dist/;
 #   2. create the `Eslabon-cli/homebrew-tap` repository with this file at
-#      Formula/eslabon.rb, replacing RELEASE_TAG (e.g. 0.167.2) and every
+#      Formula/eslabon.rb, replacing RELEASE_TAG (e.g. 0.170.0) and every
 #      REPLACE_ME url/sha256 with the release values;
 #   3. users then run `brew tap Eslabon-cli/homebrew-tap` and `brew install eslabon`.
 #

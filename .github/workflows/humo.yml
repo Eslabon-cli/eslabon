@@ -2,24 +2,38 @@ name: humo
 
 on:
   workflow_dispatch:
+  pull_request:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
 permissions:
   contents: read
 
+concurrency:
+  group: humo-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   humo:
-    name: humo (${{ matrix.os }})
+    name: humo (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - macos-14
-          - ubuntu-24.04
+        include:
+          - os: macos-14
+            target: macos-arm64
+            smoke: true
+          - os: ubuntu-24.04
+            target: linux-x86_64
+            smoke: true
+          - os: windows-2022
+            target: windows-x86_64
+            smoke: false
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
@@ -28,8 +42,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
       - name: Build lean release binary
         working-directory: codex-rs
-        run: cargo build --release --locked -p codex-cli --bin codex
+        run: cargo build --release --locked -p codex-cli --bin eslabon
       - name: Run smoke harness
-        run: bash scripts/eslabon/humo/humo.sh codex-rs/target/release/codex
+        if: matrix.smoke
+        run: bash scripts/eslabon/humo/humo.sh codex-rs/target/release/eslabon
+      - name: Verify Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ESLABON_HOME: ${{ runner.temp }}/eslabon-home
+          CODEX_HOME: ${{ runner.temp }}/eslabon-home
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:ESLABON_HOME | Out-Null
+          $version = & codex-rs\target\release\eslabon.exe --version
+          if ($version -notmatch '^eslabon \d+\.\d+\.\d+') {
+            throw "unexpected eslabon --version output: $version"
+          }
+          Write-Output $version

@@ -1,0 +1,16 @@
+# Eslabon — baseline de prueba de upstream
+# Generado con scripts/eslabon/upstream-sync.sh --update-baseline
+# Verificado en la mini contra Codex 0.170.0 el 2026-11-18.
+# Formato: crate/target <pasadas>
+# Fallos conocidos que no cuentan como regresión:
+#   - daybreak en lote (batch)
+#   - packaged_daemon_bootstrap_seeds_local_package
+#   - snapshots de codex-tui por desfase de versión
+#   - codex-code-mode-host (5 fallos sin V8 precompilado)
+eslabon-config/all 21
+codex-cli/bin-codex 330
+codex-core/lib:config:: 619
+codex-tui/lib:eslabon 39
+codex-models-manager/all 63
+codex-http-client/all 142
+codex-exec/lib 64
